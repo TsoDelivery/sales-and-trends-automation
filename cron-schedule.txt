@@ -1,0 +1,1 @@
+0 6 1 * * cd /Users/tsora/work/sales-and-trends-automation && /opt/homebrew/bin/node scripts/write-sales-trends.mjs --month $(date -v-1m +%Y-%m) --write >> /tmp/sales-trends-cron.log 2>&1
