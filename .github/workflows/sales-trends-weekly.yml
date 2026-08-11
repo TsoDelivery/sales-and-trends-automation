@@ -1,0 +1,75 @@
+name: Sales & Trends weekly
+
+on:
+  schedule:
+    # 9am Central Monday — POS data settles over the weekend.
+    - cron: "0 14 * * 1"
+    - cron: "0 15 * * 1"
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Month to process (YYYY-MM). Blank = last completed month."
+        required: false
+
+concurrency:
+  group: sales-trends
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Guard — only proceed at 9am Central
+        id: guard
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Manual run — proceeding."
+            exit 0
+          fi
+          HOUR=$(TZ=America/Chicago date +%H)
+          echo "Central hour is $HOUR"
+          if [ "$HOUR" = "09" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "Not 9am Central (DST duplicate trigger) — skipping."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.proceed == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.proceed == 'true'
+        with:
+          node-version: "22"
+
+      - name: Materialize credentials
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" ]; then
+            echo "::error::Secret GOOGLE_SERVICE_ACCOUNT_JSON is not set."
+            exit 1
+          fi
+          mkdir -p .secrets
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > .secrets/google-service-account.json
+          node -e "JSON.parse(require('fs').readFileSync('.secrets/google-service-account.json','utf8'));console.log('service account JSON parsed OK')"
+
+      - name: Run
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: .secrets/google-service-account.json
+          SALES_TRENDS_SPREADSHEET_ID: ${{ secrets.SALES_TRENDS_SPREADSHEET_ID }}
+        run: |
+          node scripts/write-sales-trends.mjs \
+            --month "${{ github.event.inputs.month }}"
+
+      - name: Always shred credentials
+        if: always()
+        run: rm -f .secrets/google-service-account.json

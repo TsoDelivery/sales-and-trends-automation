@@ -1,0 +1,9 @@
+{
+  "name": "sales-and-trends-automation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/audit-scope.mjs",
+    "dry-run": "node scripts/write-sales-trends.mjs --month"
+  }
+}

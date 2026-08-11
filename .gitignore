@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+
+.secrets/
+secrets/
+*.local
+
+node_modules/
+dist/
+coverage/
+
+tmp-*-chrome-profile/
