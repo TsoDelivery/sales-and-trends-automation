@@ -67,8 +67,12 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: .secrets/google-service-account.json
           SALES_TRENDS_SPREADSHEET_ID: ${{ secrets.SALES_TRENDS_SPREADSHEET_ID }}
         run: |
-          node scripts/write-sales-trends.mjs \
-            --month "${{ github.event.inputs.month }}"
+          MONTH="${{ github.event.inputs.month }}"
+          if [ -z "$MONTH" ]; then
+            MONTH=$(TZ=America/Chicago date -d "last month" +%Y-%m 2>/dev/null || TZ=America/Chicago date -v-1m +%Y-%m)
+          fi
+          echo "Processing month: $MONTH"
+          node scripts/write-sales-trends.mjs --month "$MONTH" --write
 
       - name: Always shred credentials
         if: always()
