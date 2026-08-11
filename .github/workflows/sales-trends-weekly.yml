@@ -66,6 +66,7 @@ jobs:
         env:
           GOOGLE_APPLICATION_CREDENTIALS: .secrets/google-service-account.json
           SALES_TRENDS_SPREADSHEET_ID: ${{ secrets.SALES_TRENDS_SPREADSHEET_ID }}
+          TRAY_API_KEY: ${{ secrets.TRAY_API_KEY }}
         run: |
           MONTH="${{ github.event.inputs.month }}"
           if [ -z "$MONTH" ]; then
