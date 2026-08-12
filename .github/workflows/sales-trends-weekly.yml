@@ -40,10 +40,10 @@ jobs:
             echo "Not 9am Central (DST duplicate trigger) — skipping."
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: steps.guard.outputs.proceed == 'true'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         if: steps.guard.outputs.proceed == 'true'
         with:
           node-version: "22"
