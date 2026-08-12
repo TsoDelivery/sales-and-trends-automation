@@ -365,6 +365,35 @@ VALIDATION_CHANNELS = [
 ]
 THRESHOLD_PCT = 5.0
 
+# R365 reports gross 3P revenue while Sales & Trends records net revenue after
+# promotions. These bands are intentionally channel-specific and were calibrated
+# from the July 2026 closed-month comparison. They flag a change in the promo
+# relationship, rather than re-flagging the known gross-vs-net difference.
+PROMO_NET_RATIO_BANDS = {
+    "3P:Uber Eats": (0.75, 0.90),
+    "3P:DoorDash": (0.85, 1.05),
+}
+
+
+def channel_status(channel, r365_value, sheet_value):
+    """Return (status, note) using a promo-aware rule where appropriate."""
+    if not r365_value and not sheet_value:
+        return "PASS", ""
+
+    if channel in PROMO_NET_RATIO_BANDS:
+        if r365_value <= 0 or sheet_value <= 0:
+            return "FLAG", "outside expected promo-adjusted range"
+        ratio = sheet_value / r365_value
+        low, high = PROMO_NET_RATIO_BANDS[channel]
+        if low <= ratio <= high:
+            return "PASS", f"expected promo-adjusted range ({low:.0%}-{high:.0%} net/gross)"
+        return "FLAG", f"outside expected promo-adjusted range ({low:.0%}-{high:.0%} net/gross)"
+
+    delta_pct = (abs(r365_value - sheet_value) / sheet_value * 100.0) if sheet_value else 100.0
+    if delta_pct <= THRESHOLD_PCT:
+        return "PASS", "R365 gross revenue" if channel == "1P:Kiosk" else ""
+    return "FLAG", f"outside {THRESHOLD_PCT:.0f}%"
+
 
 def validate_store(month_revenue, sheet_row, store):
     rev = month_revenue.get(store["locationId"], {})
@@ -375,8 +404,13 @@ def validate_store(month_revenue, sheet_row, store):
             results.append((name, col, sheet_value, None, None, "N/A", note))
             continue
         r365_value = float(rev.get(channel, 0.0))
-        delta_pct = (abs(r365_value - sheet_value) / sheet_value * 100.0) if sheet_value else (100.0 if r365_value else 0.0)
-        status = "PASS" if delta_pct <= THRESHOLD_PCT else "FLAG"
+        status, note = channel_status(channel, r365_value, sheet_value)
+        if channel in PROMO_NET_RATIO_BANDS and r365_value and sheet_value:
+            delta_pct = abs(r365_value - sheet_value) / sheet_value * 100.0
+        else:
+            delta_pct = (abs(r365_value - sheet_value) / sheet_value * 100.0) if sheet_value else (100.0 if r365_value else 0.0)
+        if note and not (channel in PROMO_NET_RATIO_BANDS):
+            note = note or ""
         results.append((name, col, sheet_value, r365_value, delta_pct, status, note))
     return results
 
