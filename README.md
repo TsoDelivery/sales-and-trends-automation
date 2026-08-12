@@ -94,6 +94,19 @@ label in Tray. Catering remains an explicit formula placeholder — currently a
 YTD-average placeholder pending complete R365 financials — and is not populated
 with an invented amount.
 
+### Daily Days in Month updater
+
+The workflow `.github/workflows/days-in-month-daily.yml` runs daily at 8:00 AM
+Central and updates only column C (`Days in Month`) on the current month row in
+all five store tabs. It uses completed Central-time calendar days: on August 13,
+for example, it writes `12`. It never touches sales, ticket, formula, or manual
+Grafana cells. Scheduled runs write automatically; manual runs default to a dry
+run unless `dry_run` is turned off.
+
+The updater is deliberately separate from the weekly WOW writer. The WOW job
+continues to process completed Sunday–Saturday weeks, while this job maintains
+the month-to-date day-count denominator until the month closes.
+
 See [CRON.md](CRON.md) for the existing Tray schedule.
 
 ## Credentials

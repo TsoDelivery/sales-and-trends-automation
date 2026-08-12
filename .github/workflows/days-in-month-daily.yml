@@ -1,0 +1,93 @@
+name: Sales & Trends daily day count
+
+on:
+  schedule:
+    # 8:00 AM Central: GitHub cron is UTC and does not follow DST.
+    - cron: "0 13 * * *" # 8am CDT
+    - cron: "0 14 * * *" # 8am CST
+  workflow_dispatch:
+    inputs:
+      as_of:
+        description: "Central date to process (YYYY-MM-DD). Blank = today."
+        required: false
+        type: string
+      dry_run:
+        description: "Preview only; do not write the sheet"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: sales-trends-daily-day-count
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Guard — only proceed at 8am Central
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Manual run — proceeding."
+            exit 0
+          fi
+          hour="$(TZ=America/Chicago date +%-H)"
+          echo "Central hour is $hour"
+          if [ "$hour" = "8" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Not 8am Central (DST duplicate trigger) — skipping."
+          fi
+
+      - uses: actions/checkout@v5
+        if: steps.guard.outputs.run == 'true'
+
+      - uses: actions/setup-node@v5
+        if: steps.guard.outputs.run == 'true'
+        with:
+          node-version: "22"
+
+      - name: Materialize Google credentials
+        if: steps.guard.outputs.run == 'true'
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" || { echo "::error::Missing GOOGLE_SERVICE_ACCOUNT_JSON"; exit 1; }
+          mkdir -p .secrets
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > .secrets/google-service-account.json
+          node -e "JSON.parse(require('fs').readFileSync('.secrets/google-service-account.json','utf8'));console.log('Google credentials parsed OK')"
+
+      - name: Update current month day count
+        if: steps.guard.outputs.run == 'true'
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: .secrets/google-service-account.json
+          SALES_TRENDS_SPREADSHEET_ID: ${{ secrets.SALES_TRENDS_SPREADSHEET_ID }}
+        run: |
+          set -euo pipefail
+          test -n "${SALES_TRENDS_SPREADSHEET_ID:-}" || { echo "::error::Missing SALES_TRENDS_SPREADSHEET_ID"; exit 1; }
+          AS_OF="${{ inputs.as_of }}"
+          ARGS=()
+          if [ -n "$AS_OF" ]; then
+            if ! printf '%s' "$AS_OF" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+              echo "::error::as_of must be YYYY-MM-DD"
+              exit 1
+            fi
+            ARGS+=(--as-of "$AS_OF")
+          fi
+          if [ "${{ github.event_name == 'schedule' || inputs.dry_run != true }}" = "true" ]; then
+            ARGS+=(--write)
+          fi
+          node scripts/update-days-in-month.mjs "${ARGS[@]}"
+
+      - name: Remove credentials
+        if: always()
+        run: rm -f .secrets/google-service-account.json
