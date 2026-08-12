@@ -66,12 +66,30 @@ node scripts/write-sales-trends.mjs --month 2026-08 --stores arbor,tsoco
 
 ## Scheduling
 
-See [CRON.md](CRON.md) for the cron configuration. The script runs monthly via cron on the 1st of each month.
+### R365 validation
+
+The server-side workflow `.github/workflows/r365-validation-monthly.yml` runs on
+the 3rd of each month and validates the previous closed month against the live
+Sales & Trends sheet. It flags supported R365 channels when the difference is
+over 5%. It is read-only and never changes the sheet.
+
+```bash
+python3 scripts/r365-sales-trends.py --month 2026-07 --validate
+```
+
+R365 can validate Kiosk, Uber Eats, DoorDash, Favor, and Grubhub. R365 does not
+contain real channel-level Carryout or Delivery revenue; those remain covered by
+the existing Tray/UrbanPiper/Grafana flow. Uber Eats and DoorDash are compared
+with an explicit gross-vs-net-of-promos caveat.
+
+See [CRON.md](CRON.md) for the existing Tray schedule.
 
 ## Credentials
 
 - `.env` — Tray API credentials
 - `.secrets/google-service-account.json` — Google Sheets service account
+- GitHub Actions secrets: `GOOGLE_SERVICE_ACCOUNT_JSON`, `SALES_TRENDS_SPREADSHEET_ID`,
+  `R365_USERNAME`, and `R365_PASSWORD`
 
 ---
 

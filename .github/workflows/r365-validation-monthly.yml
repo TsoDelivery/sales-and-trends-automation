@@ -1,0 +1,71 @@
+name: R365 Sales & Trends validation
+
+on:
+  schedule:
+    # Run after month close. GitHub cron is UTC; accept either DST hour.
+    - cron: "0 14 3 * *"
+    - cron: "0 15 3 * *"
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Closed month to validate (YYYY-MM). Blank = previous month."
+        required: false
+        type: string
+      fail_on_flag:
+        description: "Fail the run when a supported channel differs by more than 5%."
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: r365-validation
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-r365.txt
+
+      - name: Materialize Google credentials
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" || { echo "::error::Missing GOOGLE_SERVICE_ACCOUNT_JSON"; exit 1; }
+          mkdir -p .secrets
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > .secrets/google-service-account.json
+          python -c "import json; json.load(open('.secrets/google-service-account.json')); print('Google credentials parsed OK')"
+
+      - name: Validate closed month
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: .secrets/google-service-account.json
+          SALES_TRENDS_SPREADSHEET_ID: ${{ secrets.SALES_TRENDS_SPREADSHEET_ID }}
+          R365_USERNAME: ${{ secrets.R365_USERNAME }}
+          R365_PASSWORD: ${{ secrets.R365_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "${R365_USERNAME:-}" || { echo "::error::Missing R365_USERNAME"; exit 1; }
+          test -n "${R365_PASSWORD:-}" || { echo "::error::Missing R365_PASSWORD"; exit 1; }
+          test -n "${SALES_TRENDS_SPREADSHEET_ID:-}" || { echo "::error::Missing SALES_TRENDS_SPREADSHEET_ID"; exit 1; }
+          MONTH="${{ inputs.month }}"
+          if [ -z "$MONTH" ]; then MONTH=$(date -u -d 'last month' +%Y-%m); fi
+          printf 'Validating month: %s\n' "$MONTH"
+          ARGS=(--month "$MONTH" --validate)
+          if [ "${{ inputs.fail_on_flag || 'true' }}" = "true" ]; then ARGS+=(--fail-on-flag); fi
+          python scripts/r365-sales-trends.py "${ARGS[@]}"
+
+      - name: Remove credentials
+        if: always()
+        run: rm -f .secrets/google-service-account.json
