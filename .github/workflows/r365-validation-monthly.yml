@@ -46,7 +46,7 @@ jobs:
           test -n "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" || { echo "::error::Missing GOOGLE_SERVICE_ACCOUNT_JSON"; exit 1; }
           mkdir -p .secrets
           printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > .secrets/google-service-account.json
-          python -c "import json; json.load(open('.secrets/google-service-account.json')); print('Google credentials parsed OK')"
+          python -c "import json; d=json.load(open('.secrets/google-service-account.json')); print('Google credentials parsed OK for', d.get('client_email', '<missing>'))"
 
       - name: Validate closed month
         env:
@@ -63,7 +63,7 @@ jobs:
           if [ -z "$MONTH" ]; then MONTH=$(date -u -d 'last month' +%Y-%m); fi
           printf 'Validating month: %s\n' "$MONTH"
           ARGS=(--month "$MONTH" --validate)
-          if [ "${{ inputs.fail_on_flag || 'true' }}" = "true" ]; then ARGS+=(--fail-on-flag); fi
+          if [ "${{ github.event_name == 'schedule' || inputs.fail_on_flag == true }}" = "true" ]; then ARGS+=(--fail-on-flag); fi
           python scripts/r365-sales-trends.py "${ARGS[@]}"
 
       - name: Remove credentials
