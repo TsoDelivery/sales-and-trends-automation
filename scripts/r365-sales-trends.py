@@ -353,10 +353,11 @@ def column_letter(index):
 
 def catering_formula(column, row_num, year):
     """Return a YTD-average placeholder using prior same-year rows only."""
-    start_row = row_num + 1
+    if row_num <= 1:
+        return ""
     return (
-        f'=IFERROR(AVERAGEIF($A${start_row}:$A$200,"*.{year}",'
-        f'{column}{start_row}:{column}200),"")'
+        f'=IFERROR(AVERAGEIF($A$2:$A${row_num - 1},"*.{year}",'
+        f'{column}$2:{column}${row_num - 1}),"")'
     )
 
 

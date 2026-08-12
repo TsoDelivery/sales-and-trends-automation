@@ -70,13 +70,13 @@ def test_column_letter_supports_extended_sheet_columns():
 
 def test_catering_placeholder_uses_prior_same_year_rows_only():
     assert module.catering_formula("BZ", 9, "2026") == (
-        '=IFERROR(AVERAGEIF($A$10:$A$200,"*.2026",BZ10:BZ200),"")'
+        '=IFERROR(AVERAGEIF($A$2:$A$8,"*.2026",BZ$2:BZ$8),"")'
     )
 
 
 def test_catering_placeholder_is_blank_for_first_month_without_prior_ytd_data():
     assert module.catering_formula("BY", 15, "2026") == (
-        '=IFERROR(AVERAGEIF($A$16:$A$200,"*.2026",BY16:BY200),"")'
+        '=IFERROR(AVERAGEIF($A$2:$A$14,"*.2026",BY$2:BY$14),"")'
     )
 
 
