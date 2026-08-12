@@ -139,7 +139,7 @@ SHEET_COLUMNS = {
     "Grubhub Tix":     {"col": "AX", "idx": 49, "desc": "Grubhub Tix"},
     "7Now":            {"col": "BA", "idx": 52, "desc": "7Now (net of promos)"},
     "7Now Tix":        {"col": "BC", "idx": 54, "desc": "7Now Tix"},
-    "1P Sales Total":  {"col": "H",  "idx": 7,  "desc": "1P Sales (Carryout+Delivery+Kiosk+Phone AI)"},
+    "1P Sales Total":  {"col": "H",  "idx": 7,  "desc": "1P Sales (Carryout + Delivery + Kiosk + Phone AI)"},
     "Total Sales":     {"col": "CA", "idx": 78, "desc": "Total Sales (varies: CA for 86-col, BZ for 85-col)"},
 }
 

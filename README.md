@@ -12,8 +12,7 @@ For each of the 5 Tso Chinese Delivery stores, every month the script:
 2. **Uses R365's channel buckets where available:**
    - **1P Sales/Tix** — first-party sales (kiosk, takeout, delivery, phone orders)
    - **3P Sales/Tix** — third-party delivery platforms (DoorDash, Uber Eats, Grubhub, etc.)
-   - **Carryout** — tsochinese.com take-out orders
-   - **Kiosk** — in-store kiosk orders
+   - **1P Sales** — Carryout + Delivery + Kiosk + Phone AI
    - **Phone AI** — phone AI ordering companies (UrbanPiper, AIAssistant.co, Voicify)
 3. **Writes** supported R365 values into empty monthly cells in Google Sheets
 4. **Skips** cells that already have values (never overwrites)
@@ -85,6 +84,10 @@ contain real channel-level Carryout or Delivery revenue; those remain covered by
 the existing Tray/UrbanPiper/Grafana flow. Uber Eats and DoorDash use calibrated
 promo-adjusted net/gross bands, so the validator flags unusual promo behavior
 rather than the normal gross-vs-net difference.
+
+The separate **website sales** concept has been retired. Carryout and Delivery
+remain part of **1P Sales**, alongside Kiosk and Phone AI; percentage columns now
+refer to Total Sales rather than Website Sales.
 
 DoorDash is treated as **gross revenue**, regardless of the legacy "Net Sales"
 label in Tray. Catering remains an explicit formula placeholder — currently a
