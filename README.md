@@ -1,19 +1,21 @@
 # Sales & Trends Automation
 
-Automates the monthly sales data flow from **Tray.io POS** into the **Sales and Trends** Google Spreadsheet.
+Automates the monthly sales data flow from **Restaurant365 (R365)**, with Tray
+retained only where R365 does not yet expose a reliable equivalent, into the
+**Sales and Trends** Google Spreadsheet.
 
 ## What it does
 
 For each of the 5 Tso Chinese Delivery stores, every month the script:
 
-1. **Pulls** all order data from Tray for the given month (via Tray's reporting API)
-2. **Splits** orders into buckets:
+1. **Pulls** supported channel revenue from R365 SalesDetail for the given month
+2. **Uses R365's channel buckets where available:**
    - **1P Sales/Tix** — first-party sales (kiosk, takeout, delivery, phone orders)
    - **3P Sales/Tix** — third-party delivery platforms (DoorDash, Uber Eats, Grubhub, etc.)
    - **Carryout** — tsochinese.com take-out orders
    - **Kiosk** — in-store kiosk orders
    - **Phone AI** — phone AI ordering companies (UrbanPiper, AIAssistant.co, Voicify)
-3. **Writes** the computed values into the store's monthly tab in Google Sheets
+3. **Writes** supported R365 values into empty monthly cells in Google Sheets
 4. **Skips** cells that already have values (never overwrites)
 
 ## Stores
@@ -70,18 +72,24 @@ node scripts/write-sales-trends.mjs --month 2026-08 --stores arbor,tsoco
 
 The server-side workflow `.github/workflows/r365-validation-monthly.yml` runs on
 the 3rd of each month and validates the previous closed month against the live
-Sales & Trends sheet. It flags supported R365 channels when the difference is
-over 5%. It is read-only and never changes the sheet.
+Sales & Trends sheet, then fills only empty supported R365 cells. It flags
+supported R365 channels when the difference is outside the applicable rule.
+Existing non-empty cells are never overwritten.
 
 ```bash
 python3 scripts/r365-sales-trends.py --month 2026-07 --validate
 ```
 
-R365 can validate Kiosk, Uber Eats, DoorDash, Favor, and Grubhub. R365 does not
+R365 can validate and fill Kiosk, Uber Eats, DoorDash, Favor, and Grubhub. R365 does not
 contain real channel-level Carryout or Delivery revenue; those remain covered by
 the existing Tray/UrbanPiper/Grafana flow. Uber Eats and DoorDash use calibrated
 promo-adjusted net/gross bands, so the validator flags unusual promo behavior
 rather than the normal gross-vs-net difference.
+
+DoorDash is treated as **gross revenue**, regardless of the legacy "Net Sales"
+label in Tray. Catering remains an explicit formula placeholder — currently a
+YTD-average placeholder pending complete R365 financials — and is not populated
+with an invented amount.
 
 See [CRON.md](CRON.md) for the existing Tray schedule.
 

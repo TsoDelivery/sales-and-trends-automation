@@ -1,4 +1,4 @@
-name: R365 Sales & Trends validation
+name: R365 Sales & Trends monthly
 
 on:
   schedule:
@@ -48,7 +48,7 @@ jobs:
           printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > .secrets/google-service-account.json
           python -c "import json; d=json.load(open('.secrets/google-service-account.json')); print('Google credentials parsed OK for', d.get('client_email', '<missing>'))"
 
-      - name: Validate closed month
+      - name: Validate and fill closed month
         env:
           GOOGLE_APPLICATION_CREDENTIALS: .secrets/google-service-account.json
           SALES_TRENDS_SPREADSHEET_ID: ${{ secrets.SALES_TRENDS_SPREADSHEET_ID }}
@@ -62,7 +62,7 @@ jobs:
           MONTH="${{ inputs.month }}"
           if [ -z "$MONTH" ]; then MONTH=$(date -u -d 'last month' +%Y-%m); fi
           printf 'Validating month: %s\n' "$MONTH"
-          ARGS=(--month "$MONTH" --validate)
+          ARGS=(--month "$MONTH" --validate --write)
           if [ "${{ github.event_name == 'schedule' || inputs.fail_on_flag == true }}" = "true" ]; then ARGS+=(--fail-on-flag); fi
           python scripts/r365-sales-trends.py "${ARGS[@]}"
 

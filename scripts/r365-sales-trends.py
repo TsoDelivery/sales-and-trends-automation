@@ -10,7 +10,7 @@ Usage:
     # Read-only validation against the live sheet
     python3 scripts/r365-sales-trends.py --month 2026-07 --validate
 
-    # Write only supported empty R365 columns
+    # Fill only empty supported R365 columns
     python3 scripts/r365-sales-trends.py --month 2026-07 --write
 
     # Specific stores only
@@ -86,7 +86,8 @@ STORES = {
 
 # Order matters: more specific patterns before broader ones
 CHANNEL_RULES = [
-    # 3P delivery platforms (gross revenue — sheet stores net-of-promos)
+    # 3P delivery platforms. R365 amount is gross revenue; the sheet may show
+    # net-of-promos for some platforms.
     ("3P:Uber Eats",  lambda sa: sa.startswith("Uber Eats")),
     ("3P:DoorDash",   lambda sa: sa.startswith("DoorDash") or sa.startswith("Doordash")),
     ("3P:Grubhub",    lambda sa: sa.startswith("Grubhub")),
@@ -130,7 +131,7 @@ SHEET_COLUMNS = {
     "Phone AI Tix":    {"col": "AD", "idx": 29, "desc": "Phone Order (Ai) Tix"},
     "UberEats":        {"col": "AG", "idx": 32, "desc": "UberEats (net of promos)"},
     "UberEats Tix":    {"col": "AI", "idx": 34, "desc": "UberEats Tix"},
-    "DoorDash":        {"col": "AL", "idx": 37, "desc": "DoorDash (net of promos)"},
+    "DoorDash":        {"col": "AL", "idx": 37, "desc": "DoorDash (gross revenue)"},
     "DoorDash Tix":    {"col": "AN", "idx": 39, "desc": "DoorDash Tix"},
     "Favor":           {"col": "AQ", "idx": 42, "desc": "Favor (net of promos)"},
     "Favor Tix":       {"col": "AS", "idx": 44, "desc": "Favor Tix"},
@@ -142,12 +143,13 @@ SHEET_COLUMNS = {
     "Total Sales":     {"col": "CA", "idx": 78, "desc": "Total Sales (varies: CA for 86-col, BZ for 85-col)"},
 }
 
-# Columns this script can write (white cells). The existing Tray script handles Phone AI (AB/AD).
-# R365 can only validate Kiosk and 3P channels. Takeout/Delivery are NOT available in R365.
+# Columns this script can write (white cells). R365 is authoritative for the
+# channels below wherever SalesDetail exposes them. Tray remains the fallback
+# for Phone AI until its R365 mapping is confirmed in the live P&L.
 WRITE_COLUMNS = {
     "W": 22,  # 1P - Kiosk Take Out
     "AG": 32, # UberEats
-    "AL": 37, # DoorDash
+    "AL": 37, # DoorDash gross revenue
     "AQ": 42, # Favor
     "AV": 47, # Grubhub
     "BA": 52, # 7Now
@@ -316,6 +318,48 @@ def read_existing_row(service, spreadsheet_id, tab, row_num, max_cols=99):
     return existing[:max_cols]
 
 
+def read_header_row(service, spreadsheet_id, tab, max_cols=99):
+    """Read the header row so formulas follow the live tab's layout."""
+    result = service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{tab}'!A1:CU1",
+        valueRenderOption="FORMATTED_VALUE",
+    ).execute()
+    headers = result.get("values", [[]])[0]
+    headers.extend([""] * (max_cols - len(headers)))
+    return headers[:max_cols]
+
+
+def find_header_index(headers, label):
+    """Find a header by normalized text, returning its 0-based index."""
+    wanted = str(label).strip().casefold()
+    for idx, header in enumerate(headers):
+        if str(header).strip().casefold() == wanted:
+            return idx
+    return None
+
+
+def column_letter(index):
+    """Convert a 0-based column index to an A1 column letter."""
+    if index < 0:
+        raise ValueError("column index must be non-negative")
+    result = ""
+    index += 1
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+def catering_formula(column, row_num, year):
+    """Return a YTD-average placeholder using prior same-year rows only."""
+    start_row = row_num + 1
+    return (
+        f'=IFERROR(AVERAGEIF($A${start_row}:$A$200,"*.{year}",'
+        f'{column}{start_row}:{column}200),"")'
+    )
+
+
 def is_empty(v):
     return v in ("", None, 0, "0", "#DIV/0!", "#REF!", "#N/A")
 
@@ -364,6 +408,11 @@ VALIDATION_CHANNELS = [
     ("Phone AI", "AB", 27, None, "Handled by existing Tray/UrbanPiper automation"),
 ]
 THRESHOLD_PCT = 5.0
+
+# Catering is not yet exposed as a validated SalesDetail channel. Keep this as
+# an explicit placeholder rather than inventing a revenue number. Once R365
+# financials are complete, replace it with the approved YTD-average formula.
+CATERING_FORMULA_PLACEHOLDER = "YTD average pending R365 financials"
 
 # R365 reports gross 3P revenue while Sales & Trends records net revenue after
 # promotions. These bands are intentionally channel-specific and were calibrated
@@ -481,19 +530,29 @@ def main():
             print(f"\n{store['name']}: no R365 revenue rows")
             continue
         sheet_row = read_existing_row(service, spreadsheet_id, store["tab"], row)
+        headers = read_header_row(service, spreadsheet_id, store["tab"])
         if args.validate:
             results = validate_store(month_revenue, sheet_row, store)
             print_validation(store["name"], results)
             flagged += sum(1 for result in results if result[5] == "FLAG")
-            continue
+            if not args.write:
+                continue
         values = compute_store_values(month_revenue, {}, store_key, store)
         print(f"\n{store['name']}: Kiosk ${values['W']:,.2f}; UberEats ${values['AG']:,.2f} gross; DoorDash ${values['AL']:,.2f} gross; Favor ${values['AQ']:,.2f}; Grubhub ${values['AV']:,.2f}")
+        print(f"   Catering: formula placeholder ({CATERING_FORMULA_PLACEHOLDER})")
         if args.write:
             updates = []
             for col, idx in WRITE_COLUMNS.items():
                 value = values.get(col, 0)
                 if value > 0 and is_empty(sheet_row[idx]):
                     updates.append({"range": f"'{store['tab']}'!{col}{row}", "values": [[round(value, 2)]]})
+            catering_idx = find_header_index(headers, "Total Catering")
+            if catering_idx is not None and is_empty(sheet_row[catering_idx]):
+                catering_col = column_letter(catering_idx)
+                updates.append({
+                    "range": f"'{store['tab']}'!{catering_col}{row}",
+                    "values": [[catering_formula(catering_col, row, args.month[:4])]],
+                })
             print(f"Wrote {write_to_sheet(service, spreadsheet_id, updates)} cell(s)" if updates else "No empty supported cells to write")
     if not args.validate and not args.write:
         print("\nNo cells written. Use --validate for comparison or --write for supported empty cells.")
