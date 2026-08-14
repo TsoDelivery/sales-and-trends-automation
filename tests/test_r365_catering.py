@@ -259,8 +259,22 @@ def test_bulk_import_batches_do_not_trigger_the_lag_alarm():
 
 
 def test_a_genuinely_long_routine_lag_still_warns():
-    """The alarm must stay capable of firing, or it is decoration."""
+    """The alarm must stay capable of firing, or it is decoration.
+
+    Expressed relative to POST_LAG_PAD so raising the pad cannot silently
+    neuter this test -- which is exactly what happened when the pad went to 240.
+    """
+    over = rc.POST_LAG_PAD + 20
     routine = [dict(record("2026-01-05", "Tso Chinese Cherrywood", "4420", 10.0),
-                    posted="2026-07-01", lag_days=177)]
+                    posted="2026-07-01", lag_days=over)]
     warnings = rc.verify_completeness(routine, ["2026-01"])
     assert any("Raise POST_LAG_PAD" in w for w in warnings)
+
+
+def test_pad_covers_the_worst_observed_correction_batch():
+    """A 5-line correction for bd 2025-07-31 was posted 2026-01-21: 174 days.
+
+    The pad must cover real observed behaviour, not a hopeful guess.
+    """
+    assert rc.POST_LAG_PAD >= 174
+

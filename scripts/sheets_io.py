@@ -8,6 +8,7 @@ fix a bug.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -48,12 +49,18 @@ def sheets_service():
     return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
 
-def read_tabs(service, sheet_id, tabs, attempts=4):
+def read_tabs(service, sheet_id, tabs, attempts=5):
     """{tab: [[cell, ...], ...]} for each tab, unformatted values.
 
-    Retries on transient failures: the Sheets API intermittently returns 403
+    Retries on transient failures. The Sheets API intermittently returns 403
     "The caller does not have permission" for a service account that genuinely
-    has access, and a one-off 403 should not look like a misconfiguration.
+    has access -- it is quota/rate pressure wearing a permissions mask, and a
+    one-off 403 should not look like a misconfiguration.
+
+    Backoff is deliberately long (5s, 15s, 35s, 65s): read quota is enforced per
+    60-second window, so a 7-second retry ladder exhausts every attempt inside
+    the same window it is being throttled by and fails for no reason. Ask how
+    long the wall lasts before choosing how long to wait.
     """
     import time
     from googleapiclient.errors import HttpError
@@ -72,9 +79,14 @@ def read_tabs(service, sheet_id, tabs, attempts=4):
                 break
             except HttpError as exc:
                 last = exc
-                if exc.resp.status not in (403, 429, 500, 502, 503) or attempt == attempts - 1:
+                transient = exc.resp.status in (403, 429, 500, 502, 503)
+                if not transient or attempt == attempts - 1:
                     raise
-                time.sleep(2 ** attempt)
+                delay = (5, 15, 35, 65)[min(attempt, 3)]
+                print(f"  transient {exc.resp.status} reading {tab!r}; "
+                      f"retrying in {delay}s ({attempt + 1}/{attempts - 1})",
+                      file=sys.stderr)
+                time.sleep(delay)
         else:  # pragma: no cover - defensive, loop always breaks or raises
             raise RuntimeError(f"could not read tab {tab!r}: {last}")
     return out

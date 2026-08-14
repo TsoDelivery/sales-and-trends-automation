@@ -54,10 +54,12 @@ import urllib.request
 
 BASE = "https://odata.restaurant365.net/api/v2/views/"
 WINDOW_DAYS = 25          # <=31 hard API limit, 25 leaves headroom
-# Journals post LONG after the sale: median ~31 days, max ~58 observed. A small
-# pad silently truncates whole months, so this is deliberately generous. The
-# cost is a few extra queries; the cost of getting it wrong is quiet bad data.
-POST_LAG_PAD = 120
+# Journals post LONG after the sale. Ordinary weekly journals land within ~2
+# weeks, but correction batches are far worse: a 5-line adjustment for business
+# date 2025-07-31 was posted 2026-01-21, a lag of 174 days. A small pad silently
+# truncates whole months, so this is deliberately generous -- the cost is a few
+# extra queries, and the cost of getting it wrong is quiet bad data.
+POST_LAG_PAD = 240
 TIMEOUT = 300
 
 # R365 location name -> Sales & Trends tab name.

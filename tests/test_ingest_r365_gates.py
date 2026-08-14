@@ -90,3 +90,62 @@ def test_never_zero_out_a_real_sheet_figure():
     """
     sheet_value, r365_value = 4348.75, 0.00
     assert abs(r365_value) < 0.01 and sheet_value > 0
+
+
+def test_read_retry_backoff_outlasts_the_quota_window():
+    """A retry ladder shorter than the quota window is decoration.
+
+    Sheets read quota is enforced per 60-second window. The original ladder
+    (1+2+4 = 7s) spent every attempt inside the same window that was throttling
+    it, so a transient 403 still killed the run. The full ladder must be able to
+    outwait a whole window.
+    """
+    ladder = (5, 15, 35, 65)
+    assert sum(ladder) > 60, "must be able to outwait a full quota window"
+    assert ladder[-1] > 60, "final wait should clear a full window on its own"
+
+
+def test_transient_403_is_retried_not_fatal():
+    """403 from Sheets is usually rate pressure wearing a permissions mask."""
+    import time
+
+    import sheets_io
+    from googleapiclient.errors import HttpError
+
+    class FakeResp:
+        status = 403
+        reason = "Forbidden"
+
+        def __getitem__(self, key):        # HttpError reads resp like a mapping
+            return {"content-type": "application/json"}.get(key, "")
+
+        def get(self, key, default=None):
+            return {"content-type": "application/json"}.get(key, default)
+
+    calls = {"n": 0}
+
+    class FakeValues:
+        def get(self, **kw):
+            return self
+
+        def execute(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise HttpError(FakeResp(), b'{"error": {"message": "rate"}}')
+            return {"values": [["ok"]]}
+
+    class FakeSheets:
+        def values(self):
+            return FakeValues()
+
+    class FakeService:
+        def spreadsheets(self):
+            return FakeSheets()
+
+    real_sleep, time.sleep = time.sleep, lambda s: None
+    try:
+        out = sheets_io.read_tabs(FakeService(), "sid", ["Tab"])
+    finally:
+        time.sleep = real_sleep
+    assert out == {"Tab": [["ok"]]}
+    assert calls["n"] == 2, "should have retried exactly once"
