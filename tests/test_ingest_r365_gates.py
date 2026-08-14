@@ -206,7 +206,7 @@ def test_zero_is_not_written_into_a_blank_cell(monkeypatch, capsys):
     header = [""] * 70
     header[rc.column_index("BJ")] = "EZCater"
     label_row = [""] * 70
-    label_row[0] = "11.2025"          # EZCater cell left blank
+    label_row[0] = "3.2026"           # EZCater cell left blank
 
     monkeypatch.setattr(sheets_io, "load_env", lambda: None)
     monkeypatch.setattr(sheets_io, "sheets_service", lambda **k: object())
@@ -218,9 +218,9 @@ def test_zero_is_not_written_into_a_blank_cell(monkeypatch, capsys):
     # R365 reports exactly 0.00 for the blank EZCater cell.
     monkeypatch.setattr(rc, "fetch_lines", lambda *a, **k: ([], []))
     monkeypatch.setattr(rc, "aggregate",
-                        lambda *a, **k: {t: {"11.2025": {"EZCater": 0.0}}
+                        lambda *a, **k: {t: {"3.2026": {"EZCater": 0.0}}
                                          for t in rc.STORE_TABS.values()})
-    monkeypatch.setattr(sys, "argv", ["ingest", "--month", "2025-11"])
+    monkeypatch.setattr(sys, "argv", ["ingest", "--month", "2026-03"])
 
     try:
         spec.loader.exec_module(mod)
@@ -397,3 +397,42 @@ def test_r365_zero_guard_runs_before_the_explain_gate():
     explain_gate = body.index("explain_difference(")
     assert zero_guard < explain_gate, (
         "the R365-zero guard must be checked before the explain gate")
+
+
+# ---- frozen-history scope floor -------------------------------------------
+# Angell scoped this to 2026 forward (2026-08-14): the two unreconcilable cells
+# are both 2025, and chasing them has no forward value.
+
+def test_2025_months_are_out_of_scope():
+    mod = _ingest_module()
+    for month in ("2025-11", "2025-07", "2024-03", "2023-12"):
+        ok, why = mod.month_is_managed(month)
+        assert not ok, f"{month} should be frozen"
+        assert "frozen" in why
+
+
+def test_2026_forward_is_in_scope():
+    mod = _ingest_module()
+    for month in ("2026-01", "2026-06", "2027-02"):
+        ok, _ = mod.month_is_managed(month)
+        assert ok, f"{month} should be writable"
+
+
+def test_freeze_needs_the_unpleasant_flag():
+    """An innocuous --backfill would get typed by accident; this must not."""
+    mod = _ingest_module()
+    ok, why = mod.month_is_managed("2025-11", unfreeze=True)
+    assert ok and "overridden explicitly" in why
+    import inspect
+    src = inspect.getsource(mod.parse_args)
+    assert "--i-know-this-rewrites-frozen-history" in src
+
+
+def test_scope_gate_precedes_any_r365_fetch():
+    """Out-of-scope must cost nothing: no credentials, no API call, no sheet read."""
+    src = open("scripts/ingest-catering-r365.py").read()
+    body = src.split("def main(")[1]
+    assert body.index("month_is_managed(") < body.index("auth_headers("), \
+        "scope gate must run before R365 auth/fetch"
+    assert body.index("month_is_managed(") < body.index("month_is_settled("), \
+        "scope gate must be the first gate"

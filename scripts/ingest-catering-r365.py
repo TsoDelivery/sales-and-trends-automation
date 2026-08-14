@@ -43,6 +43,20 @@ import catering_pl as cp
 # 45 days clears the weekly cadence with room to spare without waiting forever.
 DEFAULT_SETTLE_DAYS = 45
 
+# Automation owns 2026 forward; 2025 and earlier are frozen history.
+#
+# Angell's call (2026-08-14): don't worry about 2025. Two 2025 cells could not be
+# reconciled against R365 (Cherrywood Nov America To Go, sheet 7,796.96 vs
+# 3,673.17; Arbor Jul My Hot Lunchbox, sheet 4,348.75 vs R365 netting to 0.00)
+# and chasing them has no forward value.
+#
+# This is a HARD floor, not a default, because the alternative is remembering to
+# scope every invocation correctly forever. A backfill flag with an innocent name
+# is exactly how a 2025 cell gets rewritten at 3am by a cron nobody reviewed.
+# Overriding requires --i-know-this-rewrites-frozen-history, which is deliberately
+# unpleasant to type and impossible to pass by accident.
+EARLIEST_MANAGED_MONTH = "2026-01"
+
 
 def parse_args():
     ap = argparse.ArgumentParser()
@@ -58,7 +72,24 @@ def parse_args():
     ap.add_argument("--settle-days", type=int, default=DEFAULT_SETTLE_DAYS,
                     help=f"days after month end before it is writable (default {DEFAULT_SETTLE_DAYS})")
     ap.add_argument("--today", help="override today's date, for testing")
+    ap.add_argument("--i-know-this-rewrites-frozen-history", action="store_true",
+                    dest="unfreeze",
+                    help=f"permit writing months before {EARLIEST_MANAGED_MONTH}; "
+                         f"2025 and earlier were reconciled by hand and are frozen")
     return ap.parse_args()
+
+
+def month_is_managed(month_key, unfreeze=False):
+    """(ok, reason) -- is this month inside the window automation owns?"""
+    if month_key >= EARLIEST_MANAGED_MONTH:
+        return True, ""
+    if unfreeze:
+        return True, f"{month_key} is frozen history, overridden explicitly"
+    return False, (
+        f"{month_key} is before {EARLIEST_MANAGED_MONTH}. 2025 and earlier were "
+        f"reconciled by hand and are frozen -- automation owns 2026 forward. "
+        f"Pass --i-know-this-rewrites-frozen-history only if you truly intend to "
+        f"rewrite settled history.")
 
 
 def month_is_settled(month_key, today, settle_days):
@@ -185,6 +216,15 @@ def main():
 
     print(f"Target: {month} ({first} .. {last})  ->  sheet row '{rc.month_label(month)}'")
     print(f"Mode:   {'COMMIT' if args.commit else 'DRY RUN (nothing will be written)'}")
+
+    # ---- gate 0: month must be inside the window automation owns ------------
+    # First gate deliberately: blocks in DRY RUN too, so a frozen month reports
+    # as out of scope instead of printing a plausible plan someone might chase.
+    managed, why = month_is_managed(month, args.unfreeze)
+    if not managed:
+        raise SystemExit(f"OUT OF SCOPE: {why}")
+    if why:
+        print(f"Scope:  {why}")
 
     # ---- gate 1: month must be closed and settled --------------------------
     settled, reason = month_is_settled(month, today, args.settle_days)
