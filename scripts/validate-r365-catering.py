@@ -54,7 +54,7 @@ def main():
 
     months = rc.month_range(start, end)
     agg = rc.aggregate(records)
-    warnings = rc.verify_completeness(records, months, list(warnings))
+    warnings, notes = rc.verify_completeness(records, months, list(warnings))
     for w in warnings:
         print(f"WARNING {w}", file=sys.stderr)
 

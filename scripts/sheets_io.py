@@ -35,17 +35,41 @@ def spreadsheet_id():
     return value
 
 
-def sheets_service():
+def sheets_service(verbose=False):
+    """Sheets client authenticated as THIS repo's service account.
+
+    Credential precedence matters more than it looks. The repo's own key wins
+    over the ambient GOOGLE_APPLICATION_CREDENTIALS, because that variable is
+    commonly exported in a login shell for something else entirely -- on this
+    machine it points at a GA4 analytics key that has no access to the Sales &
+    Trends workbook. Honouring it produced a 403 "caller does not have
+    permission" that looked exactly like rate-limiting, survived a 120-second
+    retry ladder, and only ever appeared in background runs (which use a login
+    shell) while every interactive run succeeded.
+
+    A wrong-identity 403 is indistinguishable from a throttling 403 unless you
+    print which identity you are using. So print it.
+    """
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
 
-    creds_path = os.environ.get(
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        str(REPO / ".secrets" / "google-service-account.json"),
-    )
-    if not Path(creds_path).exists():
-        raise SystemExit(f"Google credentials not found: {creds_path}")
+    repo_key = REPO / ".secrets" / "google-service-account.json"
+    explicit = os.environ.get("SALES_TRENDS_GOOGLE_CREDENTIALS")
+    if explicit:
+        creds_path = explicit
+    elif repo_key.exists():
+        creds_path = str(repo_key)
+    else:
+        creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+
+    if not creds_path or not Path(creds_path).exists():
+        raise SystemExit(
+            "Google credentials not found. Expected the repo key at "
+            f"{repo_key}, or set SALES_TRENDS_GOOGLE_CREDENTIALS.")
+
     creds = service_account.Credentials.from_service_account_file(creds_path, scopes=SCOPES)
+    if verbose:
+        print(f"Auth:   {creds.service_account_email}", file=sys.stderr)
     return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
 

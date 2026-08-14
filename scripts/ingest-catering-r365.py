@@ -74,6 +74,106 @@ def month_is_settled(month_key, today, settle_days):
     return True, f"{month_key} closed {age} days ago"
 
 
+def explain_difference(records, tab, label, header, existing, value, tol=1.01):
+    """Why might the sheet hold `existing` when R365 says `value`?
+
+    Returns a short human reason, or None if nothing explains it. This is the
+    hand diagnosis that preceded every correction, turned into code so the
+    reasoning is applied consistently instead of when someone remembers.
+
+    Recognised explanations, all evidence-based:
+
+    - PREFIX: the sheet equals the running total through some earlier journal.
+      The cell was keyed before the month finished posting. This is the common
+      case and the only one that is unambiguously a stale cell.
+    - DOUBLE-COUNT: the sheet equals the full month plus one journal counted
+      twice (Cherrywood June Lunchdrop: 3,539.95 + 619.95 again = 4,160.00).
+    - ACCOUNT SUBSET: the sheet equals the total of a subset of the mapped
+      accounts, i.e. someone missed one (Arbor Sep: 4440 only, omitting 4441).
+
+    Anything else returns None and the cell is left alone. "I cannot explain it"
+    is a finding, not an obstacle to route around.
+    """
+    store = next((s for s, t in rc.STORE_TABS.items() if t == tab), None)
+    if store is None:
+        return None
+    accounts = rc.HEADER_ACCOUNTS.get(header, [])
+    lines = [r for r in records
+             if r["store"] == store and r["account"] in accounts
+             and rc.month_label(r["month"]) == label]
+    if not lines:
+        return None
+
+    lines.sort(key=lambda r: (r["date"], r["posted"]))
+
+    # A cell that reads 0.00 has nothing to preserve, so filling it destroys no
+    # record. Requiring an "explanation" to replace a zero would block the safest
+    # write there is.
+    if abs(existing) < 0.01:
+        return "sheet cell was 0.00"
+
+    # PREFIX: keyed before the month finished posting.
+    #
+    # Ordered by POSTED date, not business date. A cell keyed on some day could
+    # only reflect journals that had posted BY that day, whatever business dates
+    # they carry. This distinction is not academic: Arbor Nov 2025 EZCater held
+    # 2,550.90 against 2,771.09, the difference being a 220.19 line for business
+    # date 2025-11-02 that posted late on 2026-01-09. In business-date order that
+    # line sorts FIRST and no prefix matches, so a real stale cell looked
+    # unexplained; in posted order it sorts LAST and the story is obvious.
+    by_posted = sorted(lines, key=lambda r: (r["posted"], r["date"]))
+    running = 0.0
+    for i, r in enumerate(by_posted):
+        running += r["net"]
+        if abs(running - existing) < tol and i < len(by_posted) - 1:
+            missing = len(by_posted) - i - 1
+            return (f"sheet matches R365 as of {r['posted']}, "
+                    f"{missing} line(s) posted later")
+
+    # DOUBLE-COUNT: full month plus one journal again.
+    for r in lines:
+        if abs((value + r["net"]) - existing) < tol:
+            return f"sheet double-counts {r['date']} ({r['net']:,.2f})"
+
+    # SIBLING CONFLATION: the sheet lumped another channel column into this one.
+    #
+    # This is the Arbor Sep 2025 case. EZCater taxable (4440/4442) and EZCater
+    # tax-exempt (4441) have SEPARATE columns on the sheet, but the cell held
+    # 2,750.30 = 1,415.15 + 1,335.15 -- both accounts keyed into one column.
+    # Checked before the subset rule because it is the specific, provable story;
+    # a subset match on the same numbers would be a vaguer description of it.
+    for other_header, other_accounts in rc.HEADER_ACCOUNTS.items():
+        if other_header == header:
+            continue
+        sibling = sum(r["net"] for r in records
+                      if r["store"] == store and r["account"] in other_accounts
+                      and rc.month_label(r["month"]) == label)
+        if abs(sibling) < 0.01:
+            continue
+        if abs((value + sibling) - existing) < tol:
+            return (f"sheet also included '{other_header}' ({sibling:,.2f}) "
+                    f"in this column")
+
+    # ACCOUNT SUBSET: someone missed one of the mapped accounts.
+    #
+    # Only a NON-ZERO account can explain a difference. Dropping an account that
+    # contributed 0.00 changes nothing, so it "matches" trivially and would name
+    # an innocent account as the cause -- a plausible-sounding wrong diagnosis,
+    # which is worse than none.
+    if len(accounts) > 1:
+        by_account = {}
+        for r in lines:
+            by_account[r["account"]] = by_account.get(r["account"], 0.0) + r["net"]
+        for drop in accounts:
+            if abs(by_account.get(drop, 0.0)) < 0.01:
+                continue
+            subset = sum(v for a, v in by_account.items() if a != drop)
+            if abs(subset - existing) < tol:
+                return f"sheet omits account {drop}"
+
+    return None
+
+
 def main():
     args = parse_args()
     today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
@@ -96,7 +196,7 @@ def main():
     numbers = sorted({n for nums in rc.HEADER_ACCOUNTS.values() for n in nums})
     headers = rc.auth_headers()
     records, warnings = rc.fetch_lines(numbers, first, last, headers)
-    warnings = rc.verify_completeness(records, [month], list(warnings))
+    warnings, notes = rc.verify_completeness(records, [month], list(warnings))
 
     # Coverage: a store with no journal is either a real zero or a missing feed.
     gaps = rc.coverage_gaps(records, [month])
@@ -113,7 +213,7 @@ def main():
 
     # ---- read the sheet -----------------------------------------------------
     sheets_io.load_env()
-    service = sheets_io.sheets_service()
+    service = sheets_io.sheets_service(verbose=True)
     sheet_id = sheets_io.spreadsheet_id()
     tabs = sorted(rc.STORE_TABS.values())
     sheet = sheets_io.read_tabs(service, sheet_id, tabs)
@@ -146,7 +246,14 @@ def main():
             entry = {"tab": tab, "row": row_number, "column": letter,
                      "header": header, "value": value, "existing": raw}
             if raw in ("", None):
-                planned.append(entry)
+                if abs(value) < 0.01:
+                    # Writing 0.00 into a blank cell is not information. It
+                    # asserts "this channel earned nothing" where the truth is
+                    # "this channel was not active", and it makes an untouched
+                    # history look audited.
+                    unchanged.append({**entry, "why": "blank cell, R365 has 0.00"})
+                else:
+                    planned.append(entry)
                 continue
             try:
                 existing = float(str(raw).replace("$", "").replace(",", ""))
@@ -170,7 +277,29 @@ def main():
                 skipped.append({**entry, "why": f"differs from existing {existing:,.2f} "
                                                f"(delta {value - existing:+,.2f}); not in --only"})
             elif args.overwrite:
-                planned.append({**entry, "why": f"overwriting {existing:,.2f}"})
+                # An overwrite must be EXPLAINED, not merely permitted.
+                #
+                # A sheet figure that R365 cannot reconstruct is evidence of
+                # something this mapping does not model -- a channel booked to an
+                # account we do not know, or revenue that never reached R365.
+                # Replacing it with the R365 number destroys the only surviving
+                # record of it and calls the destruction a correction.
+                #
+                # This guard exists because --overwrite let exactly that happen:
+                # Cherrywood Nov 2025 America To Go was 7,796.96 on the sheet
+                # against 3,673.17 in R365, with no prefix, subset, or cumulative
+                # reading that reproduced it. It was overwritten anyway and had
+                # to be restored by hand. A documented policy that the tool does
+                # not enforce is a policy the tool will break.
+                reason = explain_difference(records, tab, label, header, existing, value)
+                if reason:
+                    planned.append({**entry, "why": f"overwriting {existing:,.2f} ({reason})"})
+                else:
+                    skipped.append({**entry, "why":
+                                    f"differs from existing {existing:,.2f} "
+                                    f"(delta {value - existing:+,.2f}) and R365 cannot "
+                                    f"explain the sheet figure -- refusing to overwrite "
+                                    f"an unexplained value; needs --force"})
             else:
                 skipped.append({**entry, "why": f"differs from existing {existing:,.2f} "
                                                f"(delta {value - existing:+,.2f}); needs --overwrite"})
@@ -193,6 +322,11 @@ def main():
             print(f"  {tab[:26]:28} {parts}")
         else:
             print(f"  {tab[:26]:28} (no catering revenue)")
+
+    if notes:
+        print(f"\n{len(notes)} note(s) (context only, does not block):")
+        for n in notes:
+            print(f"  - {n}")
 
     if warnings:
         print(f"\n{len(warnings)} WARNING(S):")

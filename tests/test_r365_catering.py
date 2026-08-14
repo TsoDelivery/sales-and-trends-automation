@@ -253,9 +253,12 @@ def test_bulk_import_batches_do_not_trigger_the_lag_alarm():
                  posted="2025-08-25", lag_days=230) for _ in range(40)]
     routine = [dict(record("2026-06-27", "Tso Chinese Cherrywood", "4420", 10.0),
                     posted="2026-07-09", lag_days=12)]
-    warnings = rc.verify_completeness(bulk + routine, ["2026-06"])
+    warnings, notes = rc.verify_completeness(bulk + routine, ["2026-06"])
     assert not any("Raise POST_LAG_PAD" in w for w in warnings)
-    assert any("bulk-posted on 2025-08-25" in w for w in warnings)
+    assert any("bulk-posted on 2025-08-25" in n for n in notes)
+    # The import must be reported as a NOTE, never as a blocking warning.
+    assert not any("bulk-posted" in w for w in warnings), (
+        "a one-off import must not block a write")
 
 
 def test_a_genuinely_long_routine_lag_still_warns():
@@ -267,7 +270,7 @@ def test_a_genuinely_long_routine_lag_still_warns():
     over = rc.POST_LAG_PAD + 20
     routine = [dict(record("2026-01-05", "Tso Chinese Cherrywood", "4420", 10.0),
                     posted="2026-07-01", lag_days=over)]
-    warnings = rc.verify_completeness(routine, ["2026-01"])
+    warnings, notes = rc.verify_completeness(routine, ["2026-01"])
     assert any("Raise POST_LAG_PAD" in w for w in warnings)
 
 

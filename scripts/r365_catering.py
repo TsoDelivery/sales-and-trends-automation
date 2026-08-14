@@ -366,17 +366,20 @@ def fetch_lines(numbers, start, end, headers, verbose=True):
     return records, warnings
 
 
-def verify_completeness(records, months, warnings=None):
+def verify_completeness(records, months, warnings=None, notes=None):
     """Warn when the data looks truncated rather than merely sparse.
 
+    Returns (warnings, notes). WARNINGS mean "this data may be wrong, do not
+    write it". NOTES are context a human might want but that must never block a
+    write -- keeping them apart is the difference between a gate and a nuisance.
+
     Extreme lags come in BULK-IMPORT BATCHES, not from ordinary weekly journals:
-    Tso's history was loaded on 2025-08-25 (163 lines, lags to 230 days) and
-    again on 2026-01-21. Those days are one-off backfills, and letting them drive
-    the check made it warn on every single run -- an alarm that always fires is
-    an alarm nobody reads. So ignore any posting DAY that carries a big batch of
-    old lines, and judge the pad on routine journals only.
+    Tso's history was loaded on 2025-08-25 (935 lines, lags past 200 days) and
+    again on 2026-01-21. Those days are one-off backfills, so ignore any posting
+    DAY carrying a big batch of old lines and judge the pad on routine journals.
     """
     warnings = list(warnings or [])
+    notes = list(notes or [])
 
     per_posted_day = collections.Counter(
         r["posted"] for r in records
@@ -393,9 +396,9 @@ def verify_completeness(records, months, warnings=None):
                 f"POST_LAG_PAD={POST_LAG_PAD}. Raise POST_LAG_PAD -- months may "
                 f"be truncated.")
     for day in sorted(bulk_days):
-        warnings.append(
-            f"note: {per_posted_day[day]} back-dated lines were bulk-posted on "
-            f"{day}; excluded from the posting-lag check as a one-off import")
+        notes.append(
+            f"{per_posted_day[day]} back-dated lines were bulk-posted on {day}; "
+            f"excluded from the posting-lag check as a one-off import")
 
     for month in coverage_gaps(records, months):
         warnings.append(f"{month}: no catering lines at all -- verify this is a real zero")
@@ -404,7 +407,7 @@ def verify_completeness(records, months, warnings=None):
         for edge in (months[0], months[-1]):
             if not any(r["month"] == edge for r in records):
                 warnings.append(f"edge month {edge} has NO lines at all -- likely truncated")
-    return warnings
+    return warnings, notes
 
 
 # ----------------------------------------------------------------- aggregation
