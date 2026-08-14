@@ -109,52 +109,98 @@ the month-to-date day-count denominator until the month closes.
 
 See [CRON.md](CRON.md) for the existing Tray schedule.
 
-## Catering revenue from the TRIS P&L email
+## Catering revenue
 
-> **STATUS: BLOCKED — this script does not write. Read this before touching it.**
->
-> The extraction works and is unit-tested. The problem is the **grain**: the
-> TRIS P&L reports 28-day fiscal periods, but the Sales & Trends catering
-> columns hold **calendar-month** figures. Feeding the P&L into those rows
-> understates catering revenue by roughly **20–27%**. A gate in `main()` stops
-> the run before any cell is written.
+**Use `scripts/ingest-catering-r365.py`.** It reads Restaurant365 and fills the
+catering columns (BH, BJ, BM) on the five store tabs.
 
-### How we know (verified against R365, 2026-08-14)
+```bash
+# Cache R365 credentials once per session (never commit these):
+export OP_SERVICE_ACCOUNT_TOKEN=$(cat ~/.op_service_account_token)
+op item get "Tsora Restaurant365" --vault "Administrative Assistants" \
+  --fields label=username --reveal > /tmp/.r365u
+op item get "Tsora Restaurant365" --vault "Administrative Assistants" \
+  --fields label=NewPassword --reveal > /tmp/.r365p
+chmod 600 /tmp/.r365u /tmp/.r365p
 
-Three independent checks agree:
+# Dry run (default -- writes nothing):
+.venv/bin/python scripts/ingest-catering-r365.py --month 2026-06
 
-1. The sheet's own **Days in Month** column reads `31` for row `3.2026` and
-   `28` for `2.2026` — calendar lengths, not 28-day periods.
-2. R365 journal lines summed over **calendar March 2026** reproduce the sheet
-   to the cent — Cherrywood Lunchdrop `6,731.85` against a sheet value of
-   `6,732`. Same for all five stores.
-3. The **same** lines summed over **fiscal P3** (2/22–3/21) reproduce the P&L
-   figure, `4,888.10` — about 27% lower.
+# Apply:
+.venv/bin/python scripts/ingest-catering-r365.py --month 2026-06 --commit
+```
 
-So the sheet is right and the P&L is the wrong shape for these columns. Across
-all populated catering cells, R365-by-calendar-month matches the sheet on 120 of
-154 comparable cells (84 exact, 36 within a dollar of the whole-dollar keying).
+### Why R365 and not the emailed P&L
+
+These columns hold **calendar-month** revenue. The TRIS P&L only reports
+**28-day fiscal periods**, so its numbers are the wrong shape -- writing them in
+understates catering by roughly 20-27% every period. R365 is the system the P&L
+is generated *from*, so aggregating its journals by business date gives the
+right figure at any grain.
+
+Full evidence, including the near-miss that made a wrong answer look right:
+`docs/catering-grain-investigation/`.
+
+### Validated against history
+
+`scripts/validate-r365-catering.py` replays R365 against hand-keyed history it
+did not author. Over Jun 2025 - Jul 2026:
+
+| Column | Agrees | Notes |
+|---|---|---|
+| BH Lunchdrop | 64/65 (98%) | |
+| BJ EZCater | 31/37 (84%) | 5 of 6 misses are stale sheet values, see below |
+| BM America To Go | 5/10 (50%) | 3 Round Rock cells have no R365 journal at all |
+
+History was keyed to whole dollars, so cent-level differences are expected and
+counted as agreement.
+
+### Columns deliberately NOT written
+
+- **BF (In-house / Square / FlexCater)** — excluded. Its account set does not
+  reconcile on either grain: a widened set lands Menchaca Dec 2025 exactly but
+  leaves Cherrywood Oct 2025 off by ~4,400. Needs confirming with whoever
+  maintains the sheet.
+
+### Known bad history — needs a decision, not a silent fix
+
+The validator found existing cells that are wrong. The writer **skips** these by
+default rather than quietly correcting them; pass `--overwrite` to fix them.
+
+- **Six stale partial-month cells.** Each matches R365 exactly through an
+  early weekly journal and then stops — they were keyed before the month's last
+  journal posted. Example: TsoCo `6.2026` BJ reads 4,630.00 and matches R365
+  through the third of four weekly journals; the true total is 6,648.73.
+- **Arbor `10.2025` BJ = 838.45** captures only account 4440 and omits 4441
+  (EZCater tax-exempt). True total 4,648.45.
+- **Cherrywood `6.2026` BH = 4,160.00** — unexplained. R365 gives 3,539.95 by
+  business date and 3,768.85 by posting date; neither is 4,160.
+- **Round Rock BM `3.2026`, `4.2026`, `5.2026`** hold America To Go revenue but
+  R365 has **no** 4445 journal for Round Rock in any month. Either the revenue
+  is booked elsewhere or the sheet figures came from outside R365.
+
+### Safety rules the writer enforces
+
+1. Dry run by default; writing needs `--commit`.
+2. Whole, closed calendar months only, and not until `--settle-days` (default
+   45) have passed — journals post a median of 8 and up to ~110 days late, so a
+   month written too early is silently short. This is the exact mechanism that
+   produced the six stale cells.
+3. Existing differing values are skipped and reported unless `--overwrite`.
+4. Any completeness or coverage warning blocks a commit unless `--force`.
+5. Every write is read back and verified.
+
+### The P&L script
+
+`scripts/ingest-catering-pl.py` is the earlier, wrong-grain approach: it reads
+the emailed TRIS P&L, which reports 28-day fiscal periods rather than calendar
+months. A gate in `main()` stops it before any cell is written. Kept for
+reference only — the extraction itself is sound and unit-tested, it is only
+pointed at the wrong source.
 
 Note that fiscal periods still govern **elsewhere** in this repo — the row label
 `8.2026` means fiscal period 8 for the vendor profitability work. The catering
 columns are the exception, which is precisely why this was easy to get wrong.
-
-### The fix, when someone picks this up
-
-Source these columns from **R365 OData aggregated by business date** over the
-calendar month, not from the P&L:
-
-- `TransactionDetail` filtered on `createdOn`, joined to `Transaction.date` for
-  the true business date. `$top` is capped at 5000, so paginate with `$skip`.
-- `Transaction.date` needs a **full datetime literal**
-  (`date ge 2026-03-01T00:00:00Z`). A bare `2026-03-01` returns HTTP 400.
-- Auth uses a single literal backslash in the domain prefix; build it with
-  `chr(92)` rather than in a shell heredoc, or it silently 401s.
-
-The In-house column (BF) needs its account set resolved first — the heading says
-"Square, FlexCater" and `4130 - Square Catering Sales` is real, but even a widened
-set only reconciles some stores (Menchaca Dec 2025 lands exactly, Cherrywood does
-not). Treat BF as unresolved.
 
 ```bash
 # Runs the extraction and then refuses to write, explaining why
