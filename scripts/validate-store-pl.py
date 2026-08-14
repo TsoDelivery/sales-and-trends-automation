@@ -46,6 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import sheets_io
 import store_pl as sp
+import grafana_web_sales as gws
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -127,6 +128,8 @@ def main():
     ap.add_argument("--year", type=int)
     ap.add_argument("--month", type=int)
     ap.add_argument("--write", action="store_true", help="apply corrections")
+    ap.add_argument("--no-grafana", action="store_true",
+                    help="skip Carryout/Delivery (P&L channels only)")
     ap.add_argument("--json", help="write the full report as JSON")
     args = ap.parse_args()
 
@@ -167,8 +170,30 @@ def main():
     sheets_io.load_env()
     svc = sheets_io.sheets_service()
     sid = sheets_io.spreadsheet_id()
+
+    # Grafana supplies the carryout/delivery SPLIT that the P&L cannot.
+    grafana_rev, grafana_note = {}, None
+    if not args.no_grafana:
+        tok, err = gws.grafana_token()
+        if err:
+            grafana_note = f"Grafana skipped: {err}"
+        else:
+            try:
+                grafana_rev = gws.to_store_revenue(gws.fetch(year, month, tok))
+                problems = gws.check_sanity(grafana_rev)
+                if problems:
+                    # Never write a suspect split; a broken query returns zeros
+                    # that look exactly like real "no sales".
+                    grafana_rev, grafana_note = {}, "Grafana rejected: " + "; ".join(problems[:3])
+            except RuntimeError as e:
+                grafana_note = f"Grafana failed: {e}"
+    if grafana_note:
+        print(f"! {grafana_note}\n")
+
     report = {"source": source, "period": [str(start), str(end)],
-              "row": row_label, "write": args.write, "stores": {}}
+              "row": row_label, "write": args.write,
+              "grafana": grafana_note or ("ok" if grafana_rev else "disabled"),
+              "stores": {}}
     updates = []
     totals = {}
 
@@ -186,6 +211,14 @@ def main():
             continue
 
         findings = sp.compare_row(pl_store, sheet_row, allow_overwrite=args.write)
+
+        # Carryout/Delivery: P&L level, Grafana split. Replaces the combined
+        # report-only line when Grafana data is trustworthy.
+        if tab in grafana_rev:
+            pl_total = pl_store.get("total grafana sales")
+            findings = [f for f in findings if f["name"] != "Carryout+Delivery"]
+            findings += gws.compare(grafana_rev[tab], sheet_row,
+                                    allow_overwrite=args.write, pl_total=pl_total)
         report["stores"][tab] = {"row_number": target_idx, "findings": findings}
         for f in findings:
             totals[f["action"]] = totals.get(f["action"], 0) + 1
