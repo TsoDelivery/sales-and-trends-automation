@@ -1,0 +1,236 @@
+[
+ {
+  "store": "Cherrywood",
+  "row": "10.2025",
+  "column": "BF",
+  "sheet": 7294.7,
+  "pl": 7189.98,
+  "r365_cal_month": 2903.68,
+  "verdict": "unresolved"
+ },
+ {
+  "store": "Cherrywood",
+  "row": "11.2025",
+  "column": "BJ",
+  "sheet": 577.3,
+  "pl": 709.97,
+  "r365_cal_month": 709.97,
+  "verdict": "P&L correct"
+ },
+ {
+  "store": "Cherrywood",
+  "row": "11.2025",
+  "column": "BM",
+  "sheet": 7796.96,
+  "pl": 3673.17,
+  "r365_cal_month": 3673.17,
+  "verdict": "P&L correct"
+ },
+ {
+  "store": "Cherrywood",
+  "row": "12.2025",
+  "column": "BM",
+  "sheet": 1033.01,
+  "pl": 1300.16,
+  "r365_cal_month": 1300.16,
+  "verdict": "P&L correct"
+ },
+ {
+  "store": "Cherrywood",
+  "row": "2.2026",
+  "column": "BM",
+  "sheet": 1453.0,
+  "pl": 872.03,
+  "r365_cal_month": 1452.62,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "Cherrywood",
+  "row": "3.2026",
+  "column": "BH",
+  "sheet": 6732.0,
+  "pl": 4888.1,
+  "r365_cal_month": 6731.85,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "Cherrywood",
+  "row": "3.2026",
+  "column": "BM",
+  "sheet": 1811.0,
+  "pl": 1452.62,
+  "r365_cal_month": 1811.01,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "Arbor",
+  "row": "10.2025",
+  "column": "BF",
+  "sheet": 9850.9,
+  "pl": 10154.14,
+  "r365_cal_month": 9087.99,
+  "verdict": "sheet closer"
+ },
+ {
+  "store": "Arbor",
+  "row": "11.2025",
+  "column": "BJ",
+  "sheet": 2550.9,
+  "pl": 2771.09,
+  "r365_cal_month": 2771.09,
+  "verdict": "P&L correct"
+ },
+ {
+  "store": "Arbor",
+  "row": "1.2026",
+  "column": "BJ",
+  "sheet": 4231.0,
+  "pl": 2665.95,
+  "r365_cal_month": 4231.15,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "Arbor",
+  "row": "2.2026",
+  "column": "BJ",
+  "sheet": 6085.0,
+  "pl": 3441.49,
+  "r365_cal_month": 6084.78,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "Arbor",
+  "row": "3.2026",
+  "column": "BH",
+  "sheet": 4685.0,
+  "pl": 3767.35,
+  "r365_cal_month": 4684.55,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "Arbor",
+  "row": "3.2026",
+  "column": "BJ",
+  "sheet": 7022.0,
+  "pl": 6516.04,
+  "r365_cal_month": 7022.35,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "TsoCo",
+  "row": "7.2025",
+  "column": "BF",
+  "sheet": 4533.32,
+  "pl": 4553.32,
+  "r365_cal_month": 4553.32,
+  "verdict": "P&L correct"
+ },
+ {
+  "store": "TsoCo",
+  "row": "10.2025",
+  "column": "BF",
+  "sheet": 2517.64,
+  "pl": 2446.25,
+  "r365_cal_month": 1115.25,
+  "verdict": "unresolved"
+ },
+ {
+  "store": "TsoCo",
+  "row": "11.2025",
+  "column": "BF",
+  "sheet": 3367.95,
+  "pl": 3200.05,
+  "r365_cal_month": 1732.35,
+  "verdict": "unresolved"
+ },
+ {
+  "store": "TsoCo",
+  "row": "1.2026",
+  "column": "BJ",
+  "sheet": 5832.0,
+  "pl": 4934.14,
+  "r365_cal_month": 5832.24,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "TsoCo",
+  "row": "2.2026",
+  "column": "BJ",
+  "sheet": 8053.0,
+  "pl": 5174.95,
+  "r365_cal_month": 8052.7,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "TsoCo",
+  "row": "3.2026",
+  "column": "BH",
+  "sheet": 5951.0,
+  "pl": 4755.8,
+  "r365_cal_month": 5950.6,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "TsoCo",
+  "row": "3.2026",
+  "column": "BJ",
+  "sheet": 14406.0,
+  "pl": 13325.7,
+  "r365_cal_month": 14406.2,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "Round",
+  "row": "10.2025",
+  "column": "BF",
+  "sheet": 1199.25,
+  "pl": 1165.35,
+  "r365_cal_month": 1047.35,
+  "verdict": "unresolved"
+ },
+ {
+  "store": "Round",
+  "row": "11.2025",
+  "column": "BF",
+  "sheet": 691.0,
+  "pl": 502.0,
+  "r365_cal_month": 502.0,
+  "verdict": "P&L correct"
+ },
+ {
+  "store": "Round",
+  "row": "3.2026",
+  "column": "BH",
+  "sheet": 5183.0,
+  "pl": 4207.85,
+  "r365_cal_month": 5182.6,
+  "verdict": "SHEET correct"
+ },
+ {
+  "store": "Menchaca",
+  "row": "10.2025",
+  "column": "BF",
+  "sheet": 863.55,
+  "pl": 844.47,
+  "r365_cal_month": 844.47,
+  "verdict": "P&L correct"
+ },
+ {
+  "store": "Menchaca",
+  "row": "12.2025",
+  "column": "BF",
+  "sheet": 6760.95,
+  "pl": 6160.75,
+  "r365_cal_month": 6160.75,
+  "verdict": "P&L correct"
+ },
+ {
+  "store": "Menchaca",
+  "row": "3.2026",
+  "column": "BH",
+  "sheet": 5130.0,
+  "pl": 3891.2,
+  "r365_cal_month": 5130.15,
+  "verdict": "SHEET correct"
+ }
+]

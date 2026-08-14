@@ -194,6 +194,39 @@ def main(argv=None):
     target_label = fc.label_for(year, period)
     print(f"Target: P{period:02d} {year}  ({start} to {end})  sheet row '{target_label}'")
 
+    # --------------------------------------------------------------- GRAIN GATE
+    #
+    # HARD STOP. Verified against R365 on 2026-08-14 and left in place
+    # deliberately -- do NOT remove this without redoing that verification.
+    #
+    # The Sales & Trends catering columns are CALENDAR-MONTH figures. Proof:
+    #   * The sheet's own "Days in Month" column reads 31 for row "3.2026" and
+    #     28 for row "2.2026" -- calendar lengths, not 28-day fiscal periods.
+    #   * R365 journal lines summed over calendar March 2026 reproduce the sheet
+    #     to the cent (Cherrywood Lunchdrop 6,731.85 vs sheet 6,732).
+    #   * The same lines summed over fiscal P3 (2/22-3/21) reproduce the P&L
+    #     (4,888.10) -- which is ~27% LOWER.
+    #
+    # The TRIS P&L only ever reports 28-day fiscal periods. So writing a P&L
+    # figure into a row labelled "3.2026" silently understates catering revenue
+    # by roughly a fifth to a quarter. That is exactly the class of error the
+    # fiscal-calendar rule exists to prevent, in the opposite direction.
+    #
+    # Until this script sums by BUSINESS DATE over the calendar month (R365
+    # OData, not the P&L), it must not write.
+    raise SystemExit(
+        "\nBLOCKED -- grain mismatch, no cells written.\n\n"
+        f"  The P&L reports fiscal P{period:02d} {year} ({start} to {end}).\n"
+        f"  Sheet row '{target_label}' holds a CALENDAR-month figure "
+        f"({start.strftime('%B')}-ish, but not the same 28 days).\n\n"
+        "  Verified against R365: the sheet's catering cells match R365 summed\n"
+        "  over the calendar month to the cent, while the P&L matches the fiscal\n"
+        "  period -- about 20-27% lower. Writing the P&L here would understate\n"
+        "  catering revenue.\n\n"
+        "  Correct source for these columns is R365 OData aggregated by business\n"
+        "  date over the calendar month. See README 'Catering revenue' section.\n"
+    )
+
     tmpdir = None
     if args.file:
         workbook_path = Path(args.file).expanduser()

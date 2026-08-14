@@ -111,36 +111,64 @@ See [CRON.md](CRON.md) for the existing Tray schedule.
 
 ## Catering revenue from the TRIS P&L email
 
-`scripts/ingest-catering-pl.py` fills the catering columns (BF–BM) from the
-official **TSO Preliminary Financial Statement Package** that TRIS emails after
-each fiscal period closes. TRIS typically sends it on a Friday around 5:00 PM
-Central, so the job checks each Friday evening after the period ends rather than
-assuming a fixed arrival date. Tsora is a direct recipient of these emails —
-Min's investor Drive folder is deliberately **not** used, for privacy.
+> **STATUS: BLOCKED — this script does not write. Read this before touching it.**
+>
+> The extraction works and is unit-tested. The problem is the **grain**: the
+> TRIS P&L reports 28-day fiscal periods, but the Sales & Trends catering
+> columns hold **calendar-month** figures. Feeding the P&L into those rows
+> understates catering revenue by roughly **20–27%**. A gate in `main()` stops
+> the run before any cell is written.
+
+### How we know (verified against R365, 2026-08-14)
+
+Three independent checks agree:
+
+1. The sheet's own **Days in Month** column reads `31` for row `3.2026` and
+   `28` for `2.2026` — calendar lengths, not 28-day periods.
+2. R365 journal lines summed over **calendar March 2026** reproduce the sheet
+   to the cent — Cherrywood Lunchdrop `6,731.85` against a sheet value of
+   `6,732`. Same for all five stores.
+3. The **same** lines summed over **fiscal P3** (2/22–3/21) reproduce the P&L
+   figure, `4,888.10` — about 27% lower.
+
+So the sheet is right and the P&L is the wrong shape for these columns. Across
+all populated catering cells, R365-by-calendar-month matches the sheet on 120 of
+154 comparable cells (84 exact, 36 within a dollar of the whole-dollar keying).
+
+Note that fiscal periods still govern **elsewhere** in this repo — the row label
+`8.2026` means fiscal period 8 for the vendor profitability work. The catering
+columns are the exception, which is precisely why this was easy to get wrong.
+
+### The fix, when someone picks this up
+
+Source these columns from **R365 OData aggregated by business date** over the
+calendar month, not from the P&L:
+
+- `TransactionDetail` filtered on `createdOn`, joined to `Transaction.date` for
+  the true business date. `$top` is capped at 5000, so paginate with `$skip`.
+- `Transaction.date` needs a **full datetime literal**
+  (`date ge 2026-03-01T00:00:00Z`). A bare `2026-03-01` returns HTTP 400.
+- Auth uses a single literal backslash in the domain prefix; build it with
+  `chr(92)` rather than in a shell heredoc, or it silently 401s.
+
+The In-house column (BF) needs its account set resolved first — the heading says
+"Square, FlexCater" and `4130 - Square Catering Sales` is real, but even a widened
+set only reconciles some stores (Menchaca Dec 2025 lands exactly, Cherrywood does
+not). Treat BF as unresolved.
 
 ```bash
-# Newest closed period, dry run (default)
-python3 scripts/ingest-catering-pl.py
-
-# A specific period
-python3 scripts/ingest-catering-pl.py --period 8 --year 2026
-
-# Historic backfill from one workbook (each package holds 12 trailing periods)
-python3 scripts/ingest-catering-pl.py --file "P03 2026 - TSO Preliminary Financial Statements.xlsx" --all-periods
-
-# Apply
-python3 scripts/ingest-catering-pl.py --write
+# Runs the extraction and then refuses to write, explaining why
+python3 scripts/ingest-catering-pl.py --period 3 --year 2026
 ```
 
 ### Fiscal calendar
 
-Tso runs **13 periods of 28 days**, each ending on a Saturday — periods are not
-calendar months. The Sales & Trends row labelled `8.2026` is fiscal **period** 8,
-not August. The anchor is the `P03 2026` statement header ("12 Periods Ending
-03/21/2026"); rolling forward gives P08 2026 = Jul 12 – Aug 8, which matches the
-window used by the vendor profitability automation.
+`scripts/fiscal_calendar.py` implements the 13×28-day calendar, anchored on the
+`P03 2026` statement header ("12 Periods Ending 03/21/2026"). Rolling forward
+gives P08 2026 = Jul 12 – Aug 8, matching the vendor profitability automation.
+Still correct and still useful — just not the right key for catering rows.
 
-### Column mapping (verified against hand-keyed history)
+### Column mapping (extraction, verified)
 
 | Column | Sheet heading | P&L GL account |
 |---|---|---|
