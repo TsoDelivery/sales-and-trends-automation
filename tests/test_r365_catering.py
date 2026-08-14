@@ -78,8 +78,8 @@ def test_aggregate_sums_by_month_store_and_column():
     ]
     agg = rc.aggregate(records)
     tab = rc.STORE_TABS["Tso Chinese Cherrywood"]
-    assert agg[tab]["3.2026"]["BH"] == 150.25
-    assert agg[tab]["4.2026"]["BH"] == 7.00
+    assert agg[tab]["3.2026"]["Lunchdrop"] == 150.25
+    assert agg[tab]["4.2026"]["Lunchdrop"] == 7.00
 
 
 def test_aggregate_keeps_stores_separate():
@@ -88,19 +88,59 @@ def test_aggregate_keeps_stores_separate():
         record("2026-03-02", "Tso Chinese Menchaca", "4420", 200.00),
     ]
     agg = rc.aggregate(records)
-    assert agg[rc.STORE_TABS["Tso Chinese Cherrywood"]]["3.2026"]["BH"] == 100.00
-    assert agg[rc.STORE_TABS["Tso Chinese Menchaca"]]["3.2026"]["BH"] == 200.00
+    assert agg[rc.STORE_TABS["Tso Chinese Cherrywood"]]["3.2026"]["Lunchdrop"] == 100.00
+    assert agg[rc.STORE_TABS["Tso Chinese Menchaca"]]["3.2026"]["Lunchdrop"] == 200.00
 
 
-def test_aggregate_combines_ezcater_accounts_into_one_column():
-    # 4440 taxable + 4441 tax-exempt + 4442 discounts all land in BJ.
+def test_ezcater_tax_exempt_goes_to_its_own_column():
+    # 4440 taxable + 4442 discounts feed "EZCater"; 4441 tax-exempt has its OWN
+    # column, "EZCater (non-Tax)". Folding 4441 into EZCater inflates it -- an
+    # earlier version did exactly that.
     records = [
         record("2026-03-02", "Tso Chinese Cherrywood", "4440", 500.00),
         record("2026-03-03", "Tso Chinese Cherrywood", "4441", 120.00),
         record("2026-03-04", "Tso Chinese Cherrywood", "4442", -20.00),
     ]
     agg = rc.aggregate(records)
-    assert agg[rc.STORE_TABS["Tso Chinese Cherrywood"]]["3.2026"]["BJ"] == 600.00
+    cells = agg[rc.STORE_TABS["Tso Chinese Cherrywood"]]["3.2026"]
+    assert cells["EZCater"] == 480.00
+    assert cells["EZCater (non-Tax)"] == 120.00
+
+
+def test_column_letters_are_resolved_per_tab_not_hardcoded():
+    # THE BUG: BM is "America To Go" on Cherrywood but "Try Hungry" on Round
+    # Rock and "Event" on TsoCo. Hardcoding one tab's layout compared Round
+    # Rock's Try Hungry cells against America To Go revenue.
+    base = [""] * rc.column_index("BE")
+    cherrywood = base + ["", "In-house Catering (Square, FlexCater)",
+                         "In-house Catering (Square, Spoonfed)(Non-Taxable)",
+                         "Lunchdrop", "Sharebite", "EZCater", "EZCater (non-Tax)",
+                         "My Hot Lunchbox", "America To Go", "Event"]
+    round_rock = base + ["", "In-house Catering (Square, FlexCater)",
+                         "In-house Catering (Square, Spoonfed)(Non-Taxable)",
+                         "Lunchdrop", "Sharebite", "EZCater", "EZCater (non-Tax)",
+                         "My Hot Lunchbox", "Try Hungry", "Event"]
+
+    cw_writable, _, _ = rc.resolve_columns(cherrywood)
+    rr_writable, _, _ = rc.resolve_columns(round_rock)
+
+    assert cw_writable["America To Go"][0] == "BM"
+    assert "America To Go" not in rr_writable      # Round Rock has no ATG column
+    assert rr_writable["Try Hungry"][0] == "BM"    # same letter, different meaning
+    # Lunchdrop happens to be BH on both, which is why it validated cleanly.
+    assert cw_writable["Lunchdrop"][0] == rr_writable["Lunchdrop"][0] == "BH"
+
+
+def test_unknown_headers_are_reported_never_guessed():
+    row = [""] * rc.column_index("BE") + ["", "Lunchdrop", "Some New Vendor"]
+    writable, _skipped, unknown = rc.resolve_columns(row)
+    assert "Lunchdrop" in writable
+    assert unknown == {"Some New Vendor": "BG"}
+
+
+def test_column_letter_index_roundtrip():
+    for letters in ("A", "Z", "AA", "BE", "BF", "BM", "BR"):
+        assert rc.column_letter(rc.column_index(letters)) == letters
 
 
 def test_aggregate_ignores_unmapped_accounts():
@@ -120,12 +160,12 @@ def test_aggregate_nets_refunds_rather_than_dropping_them():
         record("2026-03-09", "Tso Chinese Cherrywood", "4420", -30.00),
     ]
     agg = rc.aggregate(records)
-    assert agg[rc.STORE_TABS["Tso Chinese Cherrywood"]]["3.2026"]["BH"] == 70.00
+    assert agg[rc.STORE_TABS["Tso Chinese Cherrywood"]]["3.2026"]["Lunchdrop"] == 70.00
 
 
 def test_aggregate_does_not_write_bf():
     # BF must stay out of the mapping until its account set is confirmed.
-    assert "BF" not in rc.COLUMN_ACCOUNTS
+    assert "BF" not in rc.HEADER_ACCOUNTS
     assert "BF" in rc.UNVERIFIED_COLUMNS
 
 
@@ -157,7 +197,7 @@ def test_unapproved_is_surfaced_not_dropped():
     assert len(rc.unapproved(records)) == 1
     # ...and it still counts toward the total; the report is the safeguard.
     agg = rc.aggregate(records)
-    assert agg[rc.STORE_TABS["Tso Chinese Cherrywood"]]["3.2026"]["BH"] == 105.00
+    assert agg[rc.STORE_TABS["Tso Chinese Cherrywood"]]["3.2026"]["Lunchdrop"] == 105.00
 
 
 # ------------------------------------------------------------------- windowing
@@ -194,10 +234,33 @@ def test_store_tabs_match_the_pl_extractor_tabs():
 
 
 def test_audit_accounts_include_every_mapped_account():
-    mapped = {n for nums in rc.COLUMN_ACCOUNTS.values() for n in nums}
+    mapped = {n for nums in rc.HEADER_ACCOUNTS.values() for n in nums}
     assert mapped <= set(rc.AUDIT_ACCOUNTS)
 
 
 def test_post_lag_pad_is_generous_enough_to_catch_late_journals():
     # Journals post after the sale; too small a pad silently truncates months.
     assert rc.POST_LAG_PAD >= 7
+
+
+def test_bulk_import_batches_do_not_trigger_the_lag_alarm():
+    """One-off history loads must not make the pad alarm fire on every run.
+
+    Tso's backfill posted 163 old lines on 2025-08-25 with lags to 230 days. An
+    alarm that always fires is an alarm nobody reads.
+    """
+    bulk = [dict(record("2025-01-07", "Tso Chinese Cherrywood", "4440", 10.0),
+                 posted="2025-08-25", lag_days=230) for _ in range(40)]
+    routine = [dict(record("2026-06-27", "Tso Chinese Cherrywood", "4420", 10.0),
+                    posted="2026-07-09", lag_days=12)]
+    warnings = rc.verify_completeness(bulk + routine, ["2026-06"])
+    assert not any("Raise POST_LAG_PAD" in w for w in warnings)
+    assert any("bulk-posted on 2025-08-25" in w for w in warnings)
+
+
+def test_a_genuinely_long_routine_lag_still_warns():
+    """The alarm must stay capable of firing, or it is decoration."""
+    routine = [dict(record("2026-01-05", "Tso Chinese Cherrywood", "4420", 10.0),
+                    posted="2026-07-01", lag_days=177)]
+    warnings = rc.verify_completeness(routine, ["2026-01"])
+    assert any("Raise POST_LAG_PAD" in w for w in warnings)

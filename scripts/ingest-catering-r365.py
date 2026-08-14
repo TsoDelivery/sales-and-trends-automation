@@ -50,6 +50,9 @@ def parse_args():
     ap.add_argument("--commit", action="store_true", help="actually write (default: dry run)")
     ap.add_argument("--overwrite", action="store_true",
                     help="replace existing values that differ (default: skip and report)")
+    ap.add_argument("--only", action="append", default=[],
+                    help="restrict overwrites to these tabs (repeatable); everything "
+                         "else is skipped even with --overwrite")
     ap.add_argument("--force", action="store_true",
                     help="commit despite completeness/coverage warnings")
     ap.add_argument("--settle-days", type=int, default=DEFAULT_SETTLE_DAYS,
@@ -90,7 +93,7 @@ def main():
         raise SystemExit("BLOCKED: refusing to write an unsettled month.")
 
     # ---- pull R365, padded well past the posting lag ------------------------
-    numbers = sorted({n for nums in rc.COLUMN_ACCOUNTS.values() for n in nums})
+    numbers = sorted({n for nums in rc.HEADER_ACCOUNTS.values() for n in nums})
     headers = rc.auth_headers()
     records, warnings = rc.fetch_lines(numbers, first, last, headers)
     warnings = rc.verify_completeness(records, [month], list(warnings))
@@ -116,22 +119,32 @@ def main():
     sheet = sheets_io.read_tabs(service, sheet_id, tabs)
 
     planned, skipped, unchanged = [], [], []
+    layouts = {}
     for tab in tabs:
         rows = sheet.get(tab) or []
+        if not rows:
+            warnings.append(f"{tab}: empty tab")
+            continue
+        # Resolve columns from THIS tab's header row. Letters are not portable.
+        writable, skipped_cols, unknown = rc.resolve_columns(rows[0])
+        layouts[tab] = (writable, skipped_cols, unknown)
+        for label_, letter_ in unknown.items():
+            warnings.append(f"{tab}: unrecognised catering column {letter_} "
+                            f"'{label_}' -- not written, needs a mapping decision")
         row_of = sheets_io.row_index_by_label(rows)
         if label not in row_of:
             warnings.append(f"{tab}: no row labelled {label} -- nothing written for this store")
             continue
         row_number = row_of[label]
         row = rows[row_number - 1]
-        for column in sorted(rc.COLUMN_ACCOUNTS):
-            value = agg.get(tab, {}).get(label, {}).get(column)
+        for header, (letter, _accounts) in sorted(writable.items()):
+            value = agg.get(tab, {}).get(label, {}).get(header)
             if value is None:
                 continue
-            idx = cp.column_index(column)
+            idx = rc.column_index(letter)
             raw = row[idx] if len(row) > idx else ""
-            entry = {"tab": tab, "row": row_number, "column": column,
-                     "value": value, "existing": raw}
+            entry = {"tab": tab, "row": row_number, "column": letter,
+                     "header": header, "value": value, "existing": raw}
             if raw in ("", None):
                 planned.append(entry)
                 continue
@@ -142,6 +155,20 @@ def main():
                 continue
             if abs(existing - value) < 0.01:
                 unchanged.append(entry)
+            elif abs(existing - value) < 1.01:
+                # The maintainer rounds to whole dollars. Rewriting these with
+                # cents is churn, not a correction.
+                unchanged.append({**entry, "why": "rounding"})
+            elif abs(value) < 0.01:
+                # NEVER blank out a real figure because R365 has nothing. Arbor's
+                # July 2025 My Hot Lunchbox is 4,348.75 on the sheet and 0.00 in
+                # R365 -- writing the zero would destroy the only record of it.
+                skipped.append({**entry, "why": f"R365 has 0.00 but sheet has "
+                                               f"{existing:,.2f}; refusing to zero out a "
+                                               f"real figure -- needs --force"})
+            elif args.only and f"{letter}:{tab}" not in args.only and tab not in args.only:
+                skipped.append({**entry, "why": f"differs from existing {existing:,.2f} "
+                                               f"(delta {value - existing:+,.2f}); not in --only"})
             elif args.overwrite:
                 planned.append({**entry, "why": f"overwriting {existing:,.2f}"})
             else:
@@ -149,6 +176,15 @@ def main():
                                                f"(delta {value - existing:+,.2f}); needs --overwrite"})
 
     # ---- report -------------------------------------------------------------
+    print("\nPer-tab catering layout (read from each tab's own header row):")
+    for tab in tabs:
+        if tab not in layouts:
+            continue
+        writable, _s, unknown = layouts[tab]
+        cols = "  ".join(f"{l}={h[:18]}" for h, (l, _) in
+                         sorted(writable.items(), key=lambda kv: kv[1][0]))
+        print(f"  {tab[:26]:28} {cols}")
+
     print(f"\nR365 totals for {label}:")
     for tab in tabs:
         cells = agg.get(tab, {}).get(label, {})
@@ -166,10 +202,11 @@ def main():
     print(f"\nPlanned writes: {len(planned)}   unchanged: {len(unchanged)}   skipped: {len(skipped)}")
     for p in planned:
         why = f"   [{p['why']}]" if p.get("why") else ""
-        print(f"  WRITE {p['tab'][:24]:26} {p['column']}{p['row']:<4} = {p['value']:>11,.2f}{why}")
+        print(f"  WRITE {p['tab'][:22]:24} {p['column']}{p['row']:<4} "
+              f"{p['header'][:18]:20} = {p['value']:>11,.2f}{why}")
     for s in skipped:
-        print(f"  SKIP  {s['tab'][:24]:26} {s['column']}{s['row']:<4} "
-              f"r365={s['value']:>11,.2f}  {s['why']}")
+        print(f"  SKIP  {s['tab'][:22]:24} {s['column']}{s['row']:<4} "
+              f"{s['header'][:18]:20} r365={s['value']:>11,.2f}  {s['why']}")
 
     # ---- gate 2: warnings block a commit -----------------------------------
     if args.commit and warnings and not args.force:
@@ -195,7 +232,7 @@ def main():
     for p in planned:
         rows = fresh.get(p["tab"]) or []
         row = rows[p["row"] - 1] if len(rows) >= p["row"] else []
-        idx = cp.column_index(p["column"])
+        idx = rc.column_index(p["column"])
         raw = row[idx] if len(row) > idx else ""
         try:
             got = float(str(raw).replace("$", "").replace(",", ""))

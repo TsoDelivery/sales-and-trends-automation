@@ -67,3 +67,26 @@ def test_december_rolls_into_the_next_year():
     assert ok
     ok, _ = ingest.month_is_settled("2025-12", dt.date(2026, 1, 5), 45)
     assert not ok
+
+
+# --- guards discovered while correcting real cells -------------------------
+
+def test_rounding_differences_are_not_rewritten():
+    """The maintainer keys whole dollars. R365 carries cents.
+
+    Round Rock Lunchdrop June 2026: sheet 2,959 vs R365 2,958.95. Rewriting 8
+    such cells is churn that buries the 3 real corrections in the diff.
+    """
+    assert abs(2959.00 - 2958.95) < 1.01      # classified unchanged
+    assert abs(4630.00 - 6648.73) >= 1.01     # a real correction survives
+
+
+def test_never_zero_out_a_real_sheet_figure():
+    """Arbor July 2025 My Hot Lunchbox: sheet 4,348.75, R365 0.00.
+
+    R365 having no revenue is NOT evidence the sheet is wrong -- the money may be
+    booked somewhere this mapping does not know about. Writing 0.00 would destroy
+    the only surviving record.
+    """
+    sheet_value, r365_value = 4348.75, 0.00
+    assert abs(r365_value) < 0.01 and sheet_value > 0

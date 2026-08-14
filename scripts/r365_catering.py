@@ -44,6 +44,7 @@ API CONTRACT (every line here was learned the hard way -- do not "simplify")
 from __future__ import annotations
 
 import base64
+import collections
 import datetime as dt
 import json
 import sys
@@ -83,11 +84,43 @@ NON_STORE = {
 # BH/BJ/BM verified cent-exact against hand-keyed history -- see
 # docs/catering-grain-investigation/. BF is NOT verified and is excluded by
 # default; see UNVERIFIED_COLUMNS.
-COLUMN_ACCOUNTS = {
-    "BH": ["4420"],                        # Lunchdrop
-    "BJ": ["4440", "4441", "4442"],        # EZCater: taxable + tax-exempt + discounts
-    "BM": ["4445"],                        # America To Go
+# Map a sheet HEADER LABEL to the GL accounts that feed it.
+#
+# DO NOT map by column letter. The catering columns are NOT in the same order on
+# every tab: BM is "America To Go" on Cherrywood and Arbor, "Try Hungry" on
+# Round Rock, and "Event" on TsoCo and Menchaca. An earlier version hardcoded
+# Cherrywood's layout and consequently validated Round Rock's Try Hungry cells
+# against America To Go revenue -- a meaningless comparison that made real data
+# look like a mystery. Resolve columns from row 1 of each tab, per tab.
+#
+# Each header also gets exactly the accounts it names. "EZCater" and
+# "EZCater (non-Tax)" are SEPARATE columns, so 4441 belongs to the latter alone;
+# folding it into the former inflates it.
+HEADER_ACCOUNTS = {
+    "Lunchdrop": ["4420"],
+    "EZCater": ["4440", "4442"],          # taxable sales + discounts
+    "EZCater (non-Tax)": ["4441"],        # tax-exempt sales, its own column
+    "America To Go": ["4445"],
+    "Sharebite": ["4430"],
+    "My Hot Lunchbox": ["4410", "4411"],
+    "Try Hungry": ["4446"],
 }
+
+# Headers we deliberately never write, with the reason.
+HEADER_SKIP = {
+    "In-house Catering (Square, FlexCater)": "account set unconfirmed, reconciles on neither grain",
+    "In-house Catering (Square, Spoonfed)(Non-Taxable)": "account set unconfirmed",
+    "Event": "no GL account identified",
+    "Forkable (None)": "marked None on the sheet",
+    "Cater2Me (report emailed)": "sourced from an emailed report, not R365",
+    "Cater2Me (non-taxable)": "sourced from an emailed report, not R365",
+    "Platterz (report emailed)": "sourced from an emailed report, not R365",
+    "Foodee after fees (wholesale)": "net of fees; R365 books gross",
+}
+
+# Kept only so older callers fail loudly rather than silently using a wrong map.
+COLUMN_ACCOUNTS = None
+
 
 # Deliberately NOT written. The script reports these rather than guessing.
 UNVERIFIED_COLUMNS = {
@@ -98,6 +131,51 @@ UNVERIFIED_COLUMNS = {
         "needs confirming with whoever maintains the sheet."
     ),
 }
+
+
+def resolve_columns(header_row, first_col="BE", last_col="BR"):
+    """Map header label -> column letter for ONE tab, read from its row 1.
+
+    The catering block is not in the same order on every tab, so this must be
+    called per tab. Returns (writable, skipped, unknown):
+
+        writable  {header: (column_letter, [gl_accounts])}
+        skipped   {header: column_letter}   -- known, deliberately not written
+        unknown   {header: column_letter}   -- unrecognised, reported not guessed
+    """
+    lo, hi = column_index(first_col), column_index(last_col)
+    writable, skipped, unknown = {}, {}, {}
+    for idx in range(lo, hi + 1):
+        label = str(header_row[idx]).strip() if len(header_row) > idx else ""
+        if not label:
+            continue
+        letter = column_letter(idx)
+        if label in HEADER_ACCOUNTS:
+            writable[label] = (letter, HEADER_ACCOUNTS[label])
+        elif label in HEADER_SKIP:
+            skipped[label] = letter
+        else:
+            unknown[label] = letter
+    return writable, skipped, unknown
+
+
+def column_letter(index):
+    """0-based index -> spreadsheet column letters (0 -> A, 57 -> BF)."""
+    letters = ""
+    index += 1
+    while index:
+        index, rem = divmod(index - 1, 26)
+        letters = chr(ord("A") + rem) + letters
+    return letters
+
+
+def column_index(letters):
+    """Spreadsheet column letters -> 0-based index (A -> 0, BF -> 57)."""
+    total = 0
+    for char in letters.strip().upper():
+        total = total * 26 + (ord(char) - ord("A") + 1)
+    return total - 1
+
 
 # Every catering-ish account, for --audit. Lets a person see what is being left
 # out of the mapped columns instead of trusting the mapping blindly.
@@ -287,27 +365,42 @@ def fetch_lines(numbers, start, end, headers, verbose=True):
 
 
 def verify_completeness(records, months, warnings=None):
-    """Guard against silent truncation from too small a createdOn pad.
+    """Warn when the data looks truncated rather than merely sparse.
 
-    If the largest observed posting lag is close to POST_LAG_PAD, the sweep is
-    probably clipping journals we never saw -- which looks exactly like a quiet
-    month rather than an error.
+    Extreme lags come in BULK-IMPORT BATCHES, not from ordinary weekly journals:
+    Tso's history was loaded on 2025-08-25 (163 lines, lags to 230 days) and
+    again on 2026-01-21. Those days are one-off backfills, and letting them drive
+    the check made it warn on every single run -- an alarm that always fires is
+    an alarm nobody reads. So ignore any posting DAY that carries a big batch of
+    old lines, and judge the pad on routine journals only.
     """
-    warnings = warnings if warnings is not None else []
-    lags = [r["lag_days"] for r in records if r.get("lag_days") is not None]
-    if not lags:
-        return warnings
-    worst = max(lags)
-    if worst > POST_LAG_PAD - 10:
+    warnings = list(warnings or [])
+
+    per_posted_day = collections.Counter(
+        r["posted"] for r in records
+        if r.get("lag_days") is not None and r["lag_days"] > 120)
+    bulk_days = {day for day, n in per_posted_day.items() if n >= 20}
+
+    routine = [r for r in records
+               if r.get("lag_days") is not None and r["posted"] not in bulk_days]
+    if routine:
+        worst = max(r["lag_days"] for r in routine)
+        if worst > POST_LAG_PAD:
+            warnings.append(
+                f"routine posting lag reaches {worst} days against "
+                f"POST_LAG_PAD={POST_LAG_PAD}. Raise POST_LAG_PAD -- months may "
+                f"be truncated.")
+    for day in sorted(bulk_days):
         warnings.append(
-            f"observed posting lag reaches {worst} days against POST_LAG_PAD="
-            f"{POST_LAG_PAD}. Raise POST_LAG_PAD -- months may be truncated."
-        )
+            f"note: {per_posted_day[day]} back-dated lines were bulk-posted on "
+            f"{day}; excluded from the posting-lag check as a one-off import")
+
+    for month in coverage_gaps(records, months):
+        warnings.append(f"{month}: no catering lines at all -- verify this is a real zero")
     # Edge months are the ones a too-narrow sweep starves first.
     if months:
         for edge in (months[0], months[-1]):
-            n = sum(1 for r in records if r["month"] == edge)
-            if n == 0:
+            if not any(r["month"] == edge for r in records):
                 warnings.append(f"edge month {edge} has NO lines at all -- likely truncated")
     return warnings
 
@@ -325,25 +418,28 @@ def month_label(month_key):
     return f"{int(month)}.{int(year)}"
 
 
-def aggregate(records, column_accounts=None):
-    """records -> {tab: {'3.2026': {'BH': 6731.85, ...}}}
+def aggregate(records, header_accounts=None):
+    """records -> {tab: {'3.2026': {'Lunchdrop': 6731.85, ...}}}
 
-    Only whole, closed calendar months should be passed in; the caller decides.
+    Keyed by HEADER LABEL, not column letter, because the same letter means
+    different things on different tabs. The caller resolves label -> column per
+    tab via resolve_columns(). Only whole, closed calendar months should be
+    passed in; the caller decides.
     """
-    column_accounts = column_accounts or COLUMN_ACCOUNTS
-    account_to_column = {}
-    for column, numbers in column_accounts.items():
+    header_accounts = header_accounts or HEADER_ACCOUNTS
+    account_to_header = {}
+    for header, numbers in header_accounts.items():
         for number in numbers:
-            account_to_column[str(number)] = column
+            account_to_header[str(number)] = header
 
     out = {}
     for record in records:
-        column = account_to_column.get(record["account"])
-        if column is None or record["tab"] is None:
+        header = account_to_header.get(record["account"])
+        if header is None or record["tab"] is None:
             continue
         label = month_label(record["month"])
         bucket = out.setdefault(record["tab"], {}).setdefault(label, {})
-        bucket[column] = round(bucket.get(column, 0.0) + record["net"], 2)
+        bucket[header] = round(bucket.get(header, 0.0) + record["net"], 2)
     return out
 
 
