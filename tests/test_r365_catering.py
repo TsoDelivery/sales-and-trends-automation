@@ -281,3 +281,68 @@ def test_pad_covers_the_worst_observed_correction_batch():
     """
     assert rc.POST_LAG_PAD >= 174
 
+
+
+# ---- credential sourcing ---------------------------------------------------
+# Credentials must come from 1Password on every run. The old design cached them
+# in /tmp, which does not survive a reboot, so the first scheduled run after a
+# restart failed and needed a human to re-stage by hand.
+
+def test_auth_reads_from_1password_when_no_cache(tmp_path, monkeypatch, capsys):
+    import r365_catering as rc
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        label = [c for c in cmd if c.startswith("label=")][0].split("=", 1)[1]
+        val = {"username": "svc_user", "NewPassword": "pw"}[label]
+        return type("R", (), {"returncode": 0, "stdout": val + "\n", "stderr": ""})()
+
+    tok = tmp_path / "tok"
+    tok.write_text("ops_fake_token")
+    monkeypatch.setattr(rc, "OP_TOKEN_FILE", str(tok))
+    monkeypatch.setattr(rc.subprocess, "run", fake_run)
+
+    h = rc.auth_headers(user_path=str(tmp_path / "nope_u"),
+                        pass_path=str(tmp_path / "nope_p"))
+    assert h["Authorization"].startswith("Basic ")
+    assert len(calls) == 2, "should read both fields from op"
+    assert "from 1Password" in capsys.readouterr().err
+
+
+def test_auth_never_requires_tmp_files(tmp_path, monkeypatch):
+    """A reboot wipes /tmp; that must not be able to break a scheduled run."""
+    import r365_catering as rc
+    monkeypatch.setattr(rc, "OP_TOKEN_FILE", str(tmp_path / "tok"))
+    (tmp_path / "tok").write_text("t")
+    monkeypatch.setattr(rc.subprocess, "run", lambda cmd, **kw: type(
+        "R", (), {"returncode": 0, "stdout": "v\n", "stderr": ""})())
+    # No /tmp files exist at these paths -- must still succeed.
+    rc.auth_headers(user_path=str(tmp_path / "u"), pass_path=str(tmp_path / "p"))
+
+
+def test_op_timeout_reports_the_documented_fix(tmp_path, monkeypatch):
+    """An `op` hang is a known failure mode; say so, don't call it 'auth failed'."""
+    import r365_catering as rc
+    monkeypatch.setattr(rc, "OP_TOKEN_FILE", str(tmp_path / "tok"))
+    (tmp_path / "tok").write_text("t")
+
+    def boom(cmd, **kw):
+        raise rc.subprocess.TimeoutExpired(cmd, 60)
+    monkeypatch.setattr(rc.subprocess, "run", boom)
+
+    with pytest.raises(SystemExit) as e:
+        rc.auth_headers(user_path=str(tmp_path / "u"), pass_path=str(tmp_path / "p"))
+    assert "daemon" in str(e.value)
+
+
+def test_auth_error_never_leaks_a_secret(tmp_path, monkeypatch):
+    import r365_catering as rc
+    monkeypatch.setattr(rc, "OP_TOKEN_FILE", str(tmp_path / "tok"))
+    (tmp_path / "tok").write_text("ops_super_secret_token_value")
+    monkeypatch.setattr(rc.subprocess, "run", lambda cmd, **kw: type(
+        "R", (), {"returncode": 1, "stdout": "",
+                  "stderr": "isn't an item in the vault"})())
+    with pytest.raises(SystemExit) as e:
+        rc.auth_headers(user_path=str(tmp_path / "u"), pass_path=str(tmp_path / "p"))
+    assert "ops_super_secret_token_value" not in str(e.value)

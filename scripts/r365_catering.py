@@ -47,6 +47,8 @@ import base64
 import collections
 import datetime as dt
 import json
+import os
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -190,26 +192,91 @@ AUDIT_ACCOUNTS = [
 
 # ------------------------------------------------------------------ transport
 
-def auth_headers(user_path="/tmp/.r365u", pass_path="/tmp/.r365p"):
-    """Basic auth for R365. The domain prefix needs one literal backslash."""
+OP_ITEM = "Tsora Restaurant365"
+OP_VAULT = "Administrative Assistants"
+OP_TOKEN_FILE = "~/.op_service_account_token"
+
+
+def _op_field(label, token):
+    """Read one field from 1Password via the service-account CLI.
+
+    Service-account mode is the only auth model used here: `op signin`,
+    `--account`, and the desktop-app flow all need a UI to answer, so they hang
+    forever in a cron with no terminal attached.
+    """
+    env = dict(os.environ, OP_SERVICE_ACCOUNT_TOKEN=token)
+    # Never let `op` inherit a stale session/config that could trigger a Touch ID
+    # prompt; service-account token in the environment is the whole auth story.
+    env.pop("OP_SESSION", None)
     try:
-        user = open(user_path).read().strip()
-        password = open(pass_path).read().strip()
-    except FileNotFoundError as exc:
-        raise SystemExit(
-            f"R365 credentials not cached ({exc.filename}). Run:\n"
-            "  export OP_SERVICE_ACCOUNT_TOKEN=$(cat ~/.op_service_account_token)\n"
-            '  op item get "Tsora Restaurant365" --vault "Administrative Assistants" '
-            "--fields label=username --reveal > /tmp/.r365u\n"
-            '  op item get "Tsora Restaurant365" --vault "Administrative Assistants" '
-            "--fields label=NewPassword --reveal > /tmp/.r365p\n"
-            "  chmod 600 /tmp/.r365u /tmp/.r365p"
-        ) from exc
-    if not user or not password:
-        raise SystemExit("R365 credential files are empty")
+        out = subprocess.run(
+            ["op", "item", "get", OP_ITEM, "--vault", OP_VAULT,
+             "--fields", f"label={label}", "--reveal"],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+    except FileNotFoundError:
+        return None, "the `op` CLI is not installed"
+    except subprocess.TimeoutExpired:
+        # A hang here is the documented `op` failure mode (daemon pileup / stale
+        # socket / lingering system-auth flag). Say so instead of "auth failed".
+        return None, ("`op` timed out after 60s -- likely a daemon pileup or stale "
+                      "socket. Try: pkill -9 -f 'op daemon'; "
+                      "rm -f ~/.config/op/op-daemon.sock")
+    if out.returncode != 0:
+        # stderr can echo the item/vault name but never a secret value.
+        return None, f"`op` failed: {out.stderr.strip().splitlines()[-1] if out.stderr.strip() else 'unknown error'}"
+    value = out.stdout.strip()
+    if not value:
+        return None, f"field {label!r} on {OP_ITEM!r} is empty"
+    return value, None
+
+
+def auth_headers(user_path="/tmp/.r365u", pass_path="/tmp/.r365p"):
+    """Basic auth for R365. The domain prefix needs one literal backslash.
+
+    Credentials come from 1Password on every run. The old design cached them in
+    /tmp, which does not survive a reboot -- so the first scheduled run after a
+    restart failed on missing credentials and needed a human to re-stage them by
+    hand. A scheduled job must be able to authenticate unattended, indefinitely.
+
+    The /tmp files are still honoured when present, as a deliberate override for
+    local iteration (and so a 1Password outage does not hard-block a human who
+    already has them staged), but they are no longer required and nothing creates
+    them automatically.
+    """
+    user = password = None
+    source = None
+
+    if os.path.exists(user_path) and os.path.exists(pass_path):
+        cached_user = open(user_path).read().strip()
+        cached_pass = open(pass_path).read().strip()
+        if cached_user and cached_pass:
+            user, password, source = cached_user, cached_pass, "cached /tmp files"
+
+    if not user:
+        token_path = os.path.expanduser(OP_TOKEN_FILE)
+        if not os.path.exists(token_path):
+            raise SystemExit(
+                f"R365 credentials unavailable: no 1Password service-account token "
+                f"at {OP_TOKEN_FILE} and no cached files.\n"
+                f"The token is required for unattended runs.")
+        token = open(token_path).read().strip()
+        if not token:
+            raise SystemExit(f"{OP_TOKEN_FILE} is empty")
+
+        user, err_u = _op_field("username", token)
+        password, err_p = _op_field("NewPassword", token)
+        if not user or not password:
+            raise SystemExit(
+                f"R365 credentials unavailable from 1Password "
+                f"({err_u or err_p}).\n"
+                f"Item {OP_ITEM!r} in vault {OP_VAULT!r}.")
+        source = "1Password"
+
+    print(f"R365 auth: credentials from {source}", file=sys.stderr)
     principal = "tsochinese" + chr(92) + user
-    token = base64.b64encode(f"{principal}:{password}".encode()).decode()
-    return {"Authorization": f"Basic {token}", "Accept": "application/json"}
+    token_b64 = base64.b64encode(f"{principal}:{password}".encode()).decode()
+    return {"Authorization": f"Basic {token_b64}", "Accept": "application/json"}
 
 
 def get(entity, params, headers):
