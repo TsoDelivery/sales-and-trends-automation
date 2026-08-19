@@ -81,7 +81,9 @@ python3 scripts/r365-sales-trends.py --month 2026-07 --validate
 
 R365 can validate and fill Kiosk, Uber Eats, DoorDash, Favor, and Grubhub. R365 does not
 contain real channel-level Carryout or Delivery revenue; those remain covered by
-the existing Tray/UrbanPiper/Grafana flow. Uber Eats and DoorDash use calibrated
+the existing Tray/UrbanPiper flow and the separate server-side Grafana WOW 1P
+automation. The Grafana job uses a dedicated read-only service credential and
+independent write-back verification; it is not part of this monthly R365 writer. Uber Eats and DoorDash use calibrated
 promo-adjusted net/gross bands, so the validator flags unusual promo behavior
 rather than the normal gross-vs-net difference.
 
